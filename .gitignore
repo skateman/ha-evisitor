@@ -1,0 +1,85 @@
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.yaml
+credentials.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+wheels/
+*.egg-info/
+*.egg
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+.installed.cfg
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+.tox/
+.nox/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+Thumbs.db
+
+# --- Home Assistant runtime / dev artifacts ---
+# Local HA dev container working dirs
+config/
+!custom_components/**/config/
+.storage/
+home-assistant.log
+home-assistant.log.*
+home-assistant_v2.db
+home-assistant_v2.db-*
+.HA_VERSION
+.uuid
+*.pid
+deps/
+tts/
+www/
+known_devices.yaml
+ip_bans.yaml
+zigbee.db*
+zwave-network*.json
+
+# HACS workspace
+.hacs/
+
+# --- Misc ---
+.playwright-mcp/
+*.bak
+*.tmp

@@ -1,0 +1,89 @@
+blueprint:
+  name: eVisitor – auto check-in on arrival
+  description: >-
+    Automatically register the mapped HA person in eVisitor when they
+    transition to "home". Leave "Stay length (days)" blank to use the
+    integration's default 48 h window.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/auto_check_in.yaml
+  input:
+    person:
+      name: Person(s)
+      description: >-
+        One or more HA person entities to track and check in. The
+        check-in fires once per person, when *that* person becomes
+        home. Each chosen person must be mapped in the eVisitor
+        integration's options.
+      selector:
+        entity:
+          domain: person
+          multiple: true
+
+    presence_debounce_minutes:
+      name: Presence debounce (minutes)
+      description: >-
+        How long the person must continuously stay "home" before the
+        check-in fires. Guards against brief presence flapping.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+    stay_days:
+      name: Stay length (days)
+      description: >-
+        How many days from today the prijava should be valid for.
+        Leave blank to use the integration's default (48 h).
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 90
+          step: 1
+          unit_of_measurement: days
+          mode: box
+
+    check_out_time:
+      name: Default check-out time (HH:MM)
+      description: >-
+        Time-of-day component of the foreseen check-out. Only used when
+        "Stay length (days)" is set to 1 or more.
+      default: "10:00"
+      selector:
+        text:
+
+variables:
+  stay_days: !input stay_days
+  check_out_time: !input check_out_time
+
+trigger:
+  - platform: state
+    entity_id: !input person
+    to: "home"
+    for:
+      minutes: !input presence_debounce_minutes
+
+action:
+  - choose:
+      - conditions:
+          - "{{ (stay_days | int(0)) > 0 }}"
+        sequence:
+          - service: evisitor.check_in_person
+            data:
+              person: "{{ trigger.entity_id }}"
+              foreseen_stay_until: >-
+                {%- set parts = (check_out_time | default('10:00')).split(':') -%}
+                {%- set hh = parts[0] | int(10) -%}
+                {%- set mm = parts[1] | int(0) -%}
+                {{ ((now()).replace(hour=hh, minute=mm, second=0, microsecond=0) + timedelta(days=stay_days | int)).isoformat() }}
+    default:
+      - service: evisitor.check_in_person
+        data:
+          person: "{{ trigger.entity_id }}"
+
+mode: parallel
+max: 10

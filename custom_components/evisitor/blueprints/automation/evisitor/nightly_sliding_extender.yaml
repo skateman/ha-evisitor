@@ -1,0 +1,78 @@
+blueprint:
+  name: eVisitor – nightly sliding stay extender
+  description: >-
+    Once per day at the configured time, push each mapped HA person's
+    active prijava forward so ForeseenStayUntil never sits in the past.
+    Optional "only if home" guard skips persons who aren't currently
+    home, so a still-mapped-but-away person is left alone.
+
+    The integration itself never writes to eVisitor unprompted; this
+    blueprint is the recommended way to keep open-ended stays current.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/nightly_sliding_extender.yaml
+  input:
+    person:
+      name: Person(s)
+      description: >-
+        One or more HA person entities to keep extended. Each is
+        processed independently.
+      selector:
+        entity:
+          domain: person
+          multiple: true
+
+    schedule:
+      name: Run at (local time)
+      description: Time of day the extender runs.
+      default: "00:05:00"
+      selector:
+        time:
+
+    stay_days:
+      name: Stay days from today
+      description: >-
+        ForeseenStayUntil is set to today (local midnight) + this many
+        days, at the integration's configured default check-out time.
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          mode: box
+
+    only_if_home:
+      name: Only extend if person is currently home
+      description: >-
+        When enabled, skip the extension for any person whose state is
+        not "home" at trigger time.
+      default: true
+      selector:
+        boolean:
+
+variables:
+  only_if_home: !input only_if_home
+  stay_days: !input stay_days
+
+trigger:
+  - platform: time
+    at: !input schedule
+
+action:
+  - repeat:
+      for_each: !input person
+      sequence:
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: >-
+                    {{ (not only_if_home)
+                       or (states(repeat.item) == 'home') }}
+              sequence:
+                - service: evisitor.extend_stay
+                  data:
+                    person: "{{ repeat.item }}"
+                    stay_days: "{{ stay_days }}"
+
+mode: parallel
+max: 10

@@ -1,0 +1,95 @@
+check_in_person:
+  name: Check in (HA person)
+  description: >-
+    Check the mapped HA person into eVisitor for the configured facility.
+    Pre-fills name, DOB, document number, etc. from the person's previous
+    stays (no PII is stored in HA).
+  fields:
+    person:
+      name: Person
+      description: HA person entity to check in.
+      required: true
+      selector:
+        entity:
+          domain: person
+    foreseen_stay_until:
+      name: Foreseen stay until
+      description: >-
+        Optional departure datetime. Defaults to today + 48 h at the
+        configured default check-out time.
+      required: false
+      selector:
+        datetime:
+
+check_out_person:
+  name: Check out (HA person)
+  description: Check the mapped HA person out of their currently active prijava.
+  fields:
+    person:
+      name: Person
+      description: HA person entity to check out.
+      required: true
+      selector:
+        entity:
+          domain: person
+    check_out_at:
+      name: Check out at
+      description: Optional departure datetime. Defaults to "now".
+      required: false
+      selector:
+        datetime:
+
+cancel_check_in:
+  name: Cancel active prijava
+  description: >-
+    Cancel (poništiti) the mapped HA person's currently active prijava.
+    Use this for mistaken check-ins; for normal end-of-stay use
+    "Check out" instead.
+  fields:
+    person:
+      name: Person
+      required: true
+      selector:
+        entity:
+          domain: person
+    reason:
+      name: Reason
+      description: Optional human-readable reason recorded with the cancellation.
+      required: false
+      selector:
+        text:
+
+extend_stay:
+  name: Extend stay
+  description: >-
+    Push the ForeseenStayUntil of the mapped HA person's active prijava
+    to a later datetime. Re-uses the original check-in ID. Provide either
+    "foreseen_stay_until" (explicit datetime) or "stay_days" (today +
+    N days at the integration's configured default check-out time). If
+    neither is provided, the integration's default stay duration is used.
+  fields:
+    person:
+      name: Person
+      required: true
+      selector:
+        entity:
+          domain: person
+    foreseen_stay_until:
+      name: New foreseen stay until
+      description: >-
+        Explicit departure datetime. Mutually exclusive with stay_days.
+      required: false
+      selector:
+        datetime:
+    stay_days:
+      name: Stay days
+      description: >-
+        Number of days from today (local midnight) to extend to, applied
+        at the integration's default check-out time. Mutually exclusive
+        with foreseen_stay_until.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 30
+          mode: box

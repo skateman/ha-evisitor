@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "eVisitor account",
+        "description": "Sign in to your eVisitor obveznik account. Use the production environment unless you have an apikey for the test environment.",
+        "data": {
+          "environment": "Environment",
+          "username": "Username",
+          "password": "Password",
+          "api_key": "API key (test environment only)"
+        }
+      },
+      "facility": {
+        "title": "Facility",
+        "description": "Pick which facility this integration entry should manage."
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid credentials.",
+      "cannot_connect": "Could not reach eVisitor. Check the network and try again.",
+      "no_facilities": "Login succeeded but no facilities were returned for this account."
+    },
+    "abort": {
+      "already_configured": "This account/facility is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "eVisitor",
+        "menu_options": {
+          "settings": "Integration settings",
+          "add_person": "Add a person mapping",
+          "remove_person": "Remove a person mapping",
+          "finish": "Done"
+        }
+      },
+      "settings": {
+        "title": "Integration settings",
+        "description": "Tunable defaults that apply to this integration entry. Times are local. Stay duration is in hours.",
+        "data": {
+          "scan_interval_minutes": "Coordinator scan interval (minutes)",
+          "default_stay_duration_hours": "Default stay duration (hours)",
+          "default_check_out_time": "Default check-out time (HH:MM)"
+        }
+      },
+      "add_person": {
+        "title": "Add person",
+        "description": "Pick the HA person entity to map. Already mapped: {already_mapped}"
+      },
+      "pick_guest": {
+        "title": "Map {person} to an eVisitor guest",
+        "description": "Pick the past guest this HA person represents. Only the chosen guest's check-in ID is stored in Home Assistant; everything else (name, date of birth, document, addresses, citizenship code, document type code, payment category, …) is fetched from eVisitor whenever the integration needs to register a check-in."
+      },
+      "remove_person": {
+        "title": "Remove person mapping"
+      }
+    },
+    "abort": {
+      "coordinator_not_ready": "eVisitor data not loaded yet. Try again in a moment.",
+      "no_past_guests": "No previously checked-in guests were found on this account.",
+      "nothing_to_remove": "There are no person mappings to remove."
+    },
+    "error": {
+      "invalid_time_format": "Times must be in HH:MM 24-hour format."
+    }
+  }
+}

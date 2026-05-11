@@ -1,0 +1,87 @@
+blueprint:
+  name: eVisitor – auto check-out after grace period
+  description: >-
+    Check the mapped HA person out of eVisitor when they have been "not
+    home" for the configured grace period. Optional time-of-day window
+    avoids 3 AM check-outs caused by overnight wifi blips.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/auto_check_out_after_grace.yaml
+  input:
+    person:
+      name: Person(s)
+      description: >-
+        One or more HA person entities. Check-out fires per person.
+      selector:
+        entity:
+          domain: person
+          multiple: true
+
+    grace_minutes:
+      name: Away grace period (minutes)
+      description: Person must remain away for this long before check-out fires.
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 1440
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+    only_during_window:
+      name: Only check out within a time-of-day window
+      description: >-
+        When enabled, only fire the check-out if the trigger time falls
+        between "Window start" and "Window end". Useful to avoid
+        nighttime presence blips triggering a real check-out.
+      default: false
+      selector:
+        boolean:
+
+    window_start:
+      name: Window start (HH:MM)
+      description: Earliest local time the check-out may fire.
+      default: "08:00"
+      selector:
+        text:
+
+    window_end:
+      name: Window end (HH:MM)
+      description: Latest local time the check-out may fire.
+      default: "23:00"
+      selector:
+        text:
+
+variables:
+  only_during_window: !input only_during_window
+  window_start: !input window_start
+  window_end: !input window_end
+
+trigger:
+  - platform: state
+    entity_id: !input person
+    from: "home"
+    for:
+      minutes: !input grace_minutes
+
+condition:
+  - condition: template
+    value_template: >-
+      {%- if not only_during_window -%}
+      true
+      {%- else -%}
+      {%- set s = window_start.split(':') | map('int') | list -%}
+      {%- set e = window_end.split(':') | map('int') | list -%}
+      {%- set start = s[0] * 60 + s[1] -%}
+      {%- set end = e[0] * 60 + e[1] -%}
+      {%- set cur = now().hour * 60 + now().minute -%}
+      {{ start <= cur <= end }}
+      {%- endif -%}
+
+action:
+  - service: evisitor.check_out_person
+    data:
+      person: "{{ trigger.entity_id }}"
+
+mode: parallel
+max: 10

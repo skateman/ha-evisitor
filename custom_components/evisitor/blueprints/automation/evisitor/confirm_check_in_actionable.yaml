@@ -1,0 +1,166 @@
+blueprint:
+  name: eVisitor – confirm check-in via actionable notification
+  description: >-
+    On arrival, send an actionable notification asking whether to
+    register the person in eVisitor. Tapping "Check in" calls
+    evisitor.check_in_person; tapping "Skip" does nothing. Pair this
+    with the auto-check-out blueprint to keep cancellations symmetric.
+  domain: automation
+  source_url: https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/confirm_check_in_actionable.yaml
+  input:
+    person:
+      name: Person(s)
+      description: >-
+        One or more HA person entities. The notification fires per
+        person when *that* person becomes home.
+      selector:
+        entity:
+          domain: person
+          multiple: true
+
+    notify_service:
+      name: Notify service
+      description: e.g. "notify.mobile_app_my_phone"
+      selector:
+        text:
+
+    presence_debounce_minutes:
+      name: Presence debounce (minutes)
+      description: How long the person must remain "home" before notifying.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+    stay_days:
+      name: Stay length (days)
+      description: >-
+        How many days from today the prijava should be valid for.
+        Leave at 0 to use the integration's default (48 h).
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 90
+          step: 1
+          unit_of_measurement: days
+          mode: box
+
+    check_out_time:
+      name: Default check-out time (HH:MM)
+      default: "10:00"
+      selector:
+        text:
+
+    notification_title:
+      name: Notification title
+      default: "eVisitor"
+      selector:
+        text:
+
+    notification_message:
+      name: Notification message
+      description: >-
+        Text shown in the actionable notification. The placeholder
+        ``{name}`` is replaced with the person's friendly name.
+      default: "Check {name} into eVisitor?"
+      selector:
+        text:
+
+    check_in_action_label:
+      name: 'Button label: Check in'
+      default: "Check in"
+      selector:
+        text:
+
+    skip_action_label:
+      name: 'Button label: Skip'
+      default: "Skip"
+      selector:
+        text:
+
+    notification_timeout_minutes:
+      name: Notification timeout (minutes)
+      description: >-
+        How long to wait for the user's tap before giving up.
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+variables:
+  stay_days: !input stay_days
+  check_out_time: !input check_out_time
+  notification_title: !input notification_title
+  notification_message: !input notification_message
+  check_in_action_label: !input check_in_action_label
+  skip_action_label: !input skip_action_label
+  notification_timeout_minutes: !input notification_timeout_minutes
+  action_check_in: "EVISITOR_CHECK_IN_{{ trigger.entity_id }}"
+  action_skip: "EVISITOR_SKIP_{{ trigger.entity_id }}"
+  person_name: "{{ state_attr(trigger.entity_id, 'friendly_name') or trigger.entity_id }}"
+  rendered_message: "{{ notification_message.replace('{name}', person_name) }}"
+
+trigger:
+  - platform: state
+    entity_id: !input person
+    to: "home"
+    for:
+      minutes: !input presence_debounce_minutes
+
+action:
+  - service: !input notify_service
+    data:
+      title: "{{ notification_title }}"
+      message: "{{ rendered_message }}"
+      data:
+        actions:
+          - action: "{{ action_check_in }}"
+            title: "{{ check_in_action_label }}"
+          - action: "{{ action_skip }}"
+            title: "{{ skip_action_label }}"
+
+  - wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_check_in }}"
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_skip }}"
+    timeout:
+      minutes: "{{ notification_timeout_minutes | int }}"
+    continue_on_timeout: false
+
+  - choose:
+      - conditions:
+          - "{{ wait.trigger.event.data.action == action_check_in }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - "{{ (stay_days | int(0)) > 0 }}"
+                sequence:
+                  - service: evisitor.check_in_person
+                    data:
+                      person: "{{ trigger.entity_id }}"
+                      foreseen_stay_until: >-
+                        {%- set parts = (check_out_time | default('10:00')).split(':') -%}
+                        {%- set hh = parts[0] | int(10) -%}
+                        {%- set mm = parts[1] | int(0) -%}
+                        {{ ((now()).replace(hour=hh, minute=mm, second=0, microsecond=0) + timedelta(days=stay_days | int)).isoformat() }}
+            default:
+              - service: evisitor.check_in_person
+                data:
+                  person: "{{ trigger.entity_id }}"
+
+mode: parallel
+max: 10

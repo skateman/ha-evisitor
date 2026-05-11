@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyevisitor"
+version = "0.1.0"
+description = "Async Python client for the Croatian e-Visitor Web API."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ha-evisitor contributors" }]
+keywords = ["evisitor", "croatia", "tourism", "home-assistant"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "aiohttp>=3.9,<5",
+]
+
+[project.optional-dependencies]
+dotenv = ["python-dotenv>=1.0"]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "aioresponses>=0.7.6",
+    "python-dotenv>=1.0",
+]
+ha-test = [
+    "pytest-homeassistant-custom-component>=0.13",
+]
+
+[project.urls]
+Documentation = "http://www.evisitor.hr/eVisitorWiki/Javno.Web-API.ashx"
+Source = "https://github.com/skateman/ha-evisitor"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyevisitor"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/pyevisitor", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    # aioresponses still uses asyncio.iscoroutinefunction (deprecated in 3.14).
+    "ignore::DeprecationWarning:aioresponses.core",
+    "ignore:'asyncio.iscoroutinefunction':DeprecationWarning",
+    # Python 3.14 + aiohttp 3.13 sometimes emit ResourceWarning during
+    # interpreter teardown for sockets/transports already in shutdown.
+    "ignore::ResourceWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    # Home Assistant + recent aiohttp emit these during setup of tests.
+    "ignore::aiohttp.web_exceptions.NotAppKeyWarning",
+    "ignore::DeprecationWarning:homeassistant",
+    "ignore::DeprecationWarning:asyncio",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "e2e: live tests against the e-Visitor test environment (require credentials)",
+]
