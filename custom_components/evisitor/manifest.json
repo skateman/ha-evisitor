@@ -1,13 +1,13 @@
 {
   "domain": "evisitor",
   "name": "eVisitor",
-  "version": "0.1.0",
+  "codeowners": ["@skateman"],
   "config_flow": true,
-  "documentation": "https://github.com/skateman/ha-evisitor",
-  "issue_tracker": "https://github.com/skateman/ha-evisitor/issues",
-  "iot_class": "cloud_polling",
-  "integration_type": "service",
   "dependencies": ["person", "calendar"],
+  "documentation": "https://github.com/skateman/ha-evisitor",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/skateman/ha-evisitor/issues",
   "requirements": ["pyevisitor==0.1.0"],
-  "codeowners": ["@skateman"]
+  "version": "0.1.0"
 }
