@@ -79,17 +79,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify all version sources agree
-        # pyproject.toml is the canonical source. The HA manifest and the
-        # library __init__ also carry the version; if any of them drift
-        # from pyproject, we hard-fail.
+      - name: Verify pyproject + manifest versions agree
+        # pyproject.toml is the canonical source. The HA manifest also
+        # carries the version (HA reads it as JSON before importing
+        # any of the integration's Python). The library's __version__
+        # is derived from package metadata at import time, so it doesn't
+        # need a separate check.
         run: |
           py=${{ needs.detect.outputs.version }}
           mf=$(python -c 'import json; print(json.load(open("custom_components/evisitor/manifest.json"))["version"])')
-          init=$(python -c 'import re; print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", open("src/pyevisitor/__init__.py").read()).group(1))')
-          echo "pyproject=$py manifest=$mf __init__=$init"
-          if [ "$py" != "$mf" ] || [ "$py" != "$init" ]; then
-            echo "::error::version mismatch -- bump pyproject.toml, custom_components/evisitor/manifest.json, AND src/pyevisitor/__init__.py to the same value"
+          echo "pyproject=$py manifest=$mf"
+          if [ "$py" != "$mf" ]; then
+            echo "::error::version mismatch -- bump pyproject.toml AND custom_components/evisitor/manifest.json to the same value"
             exit 1
           fi
 
