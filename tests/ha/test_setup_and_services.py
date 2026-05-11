@@ -146,6 +146,9 @@ async def test_check_in_failure_emits_failed_event(
             {"person": PERSON_ENTITY},
             blocking=True,
         )
+    # Drain pending event-listener callbacks before asserting on
+    # `received` -- bus.async_fire dispatch is queued, not synchronous.
+    await hass.async_block_till_done()
 
     assert received, "expected evisitor_check_in_failed event"
     assert "već prijavljen" in received[0].data["error"]
@@ -373,6 +376,12 @@ async def test_check_in_fails_loudly_when_seed_unrecoverable(
                 {"person": PERSON_ENTITY},
                 blocking=True,
             )
+        # The service call raises before the event listener runs; let
+        # the event loop drain so the bus.async_fire dispatch from the
+        # `_fire(EVENT_CHECK_IN_FAILED, …)` call lands on `received`
+        # before we assert. Without this the test races and intermittently
+        # sees `received == []`.
+        await hass.async_block_till_done()
 
         # No POST happened.
         assert client.actions.check_in_tourist.await_count == 0
