@@ -1,19 +1,75 @@
 name: release
 
+# Triggered by a push to main. The "detect" job decides whether the
+# pyproject.toml version actually changed in this push; if not, the
+# downstream jobs are skipped. If it did change, we:
+#   1. verify all three version sources agree (pyproject, manifest,
+#      __init__),
+#   2. build sdist + wheel,
+#   3. publish to PyPI via Trusted Publishing,
+#   4. tag the commit `v<version>` and create a matching GitHub Release.
+#
+# Also kept: workflow_dispatch with an explicit version input, for
+# re-running the publish path manually if needed.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (must match pyproject.toml)"
+        required: true
 
-# Cancel in-flight runs on the same ref (e.g. re-tag).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  detect:
+    name: Detect version bump
+    runs-on: ubuntu-latest
+    outputs:
+      bumped: ${{ steps.check.outputs.bumped }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the previous commit to compare pyproject.toml versions.
+          fetch-depth: 2
+
+      - name: Compare pyproject version against parent commit
+        id: check
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.loads(open("pyproject.toml","rb").read().decode())["project"]["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Manual dispatch: must match the input.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            input='${{ inputs.version }}'
+            if [ "$input" != "$version" ]; then
+              echo "::error::workflow_dispatch input ($input) does not match pyproject ($version)"
+              exit 1
+            fi
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Push: did pyproject.toml change in this commit, and is the
+          # new version different from the parent's?
+          parent_version=$(git show HEAD~1:pyproject.toml 2>/dev/null \
+            | python -c 'import sys,tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])' \
+            2>/dev/null || echo "")
+          echo "current=$version parent=$parent_version"
+          if [ "$version" != "$parent_version" ]; then
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build wheel + sdist
+    needs: detect
+    if: needs.detect.outputs.bumped == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,20 +79,24 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Verify all version sources agree
+        # pyproject.toml is the canonical source. The HA manifest and the
+        # library __init__ also carry the version; if any of them drift
+        # from pyproject, we hard-fail.
+        run: |
+          py=${{ needs.detect.outputs.version }}
+          mf=$(python -c 'import json; print(json.load(open("custom_components/evisitor/manifest.json"))["version"])')
+          init=$(python -c 'import re; print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", open("src/pyevisitor/__init__.py").read()).group(1))')
+          echo "pyproject=$py manifest=$mf __init__=$init"
+          if [ "$py" != "$mf" ] || [ "$py" != "$init" ]; then
+            echo "::error::version mismatch -- bump pyproject.toml, custom_components/evisitor/manifest.json, AND src/pyevisitor/__init__.py to the same value"
+            exit 1
+          fi
+
       - name: Install build backend
         run: |
           python -m pip install --upgrade pip
           pip install build
-
-      - name: Verify tag matches package version
-        # Compares the v-prefixed git tag (e.g. v0.1.0) against
-        # the [project] version in pyproject.toml. Hard-fails if they
-        # don't match so we never publish a mis-tagged release.
-        run: |
-          tag="${GITHUB_REF#refs/tags/v}"
-          pkg=$(python -c 'import tomllib,sys; print(tomllib.loads(open("pyproject.toml","rb").read().decode())["project"]["version"])')
-          echo "tag=$tag pkg=$pkg"
-          [ "$tag" = "$pkg" ] || { echo "::error::Tag $tag does not match pyproject version $pkg"; exit 1; }
 
       - name: Build sdist + wheel
         run: python -m build
@@ -48,7 +108,8 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    needs: build
+    needs: [detect, build]
+    if: needs.detect.outputs.bumped == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -62,3 +123,31 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
         # No `with: password:` -- Trusted Publishing uses OIDC.
+
+  tag-and-release:
+    name: Tag commit + create GitHub Release
+    needs: [detect, publish-pypi]
+    if: needs.detect.outputs.bumped == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # required to push the tag and create the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create + push tag
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.detect.outputs.version }}
+          name: v${{ needs.detect.outputs.version }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
