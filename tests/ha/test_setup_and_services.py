@@ -487,3 +487,38 @@ async def test_extend_stay_rejects_both_params(
             },
             blocking=True,
         )
+
+
+async def test_check_in_with_stay_from_backdates_the_payload(
+    hass: HomeAssistant, setup_integration
+) -> None:
+    """``check_in_person(person, stay_from=<datetime>)`` puts that
+    datetime into the CheckInTourist payload's StayFrom + TimeStayFrom,
+    rather than 'now'.
+
+    This is the path the auto-check-in blueprint takes when it passes
+    ``trigger.to_state.last_changed`` -- the moment the person actually
+    became home, not the moment presence-debounce finished.
+    """
+    from datetime import datetime, timedelta
+
+    _entry, client = setup_integration
+
+    # Pick a clearly-backdated arrival: yesterday at 18:42 local-naive.
+    arrival = (datetime.now() - timedelta(hours=37)).replace(
+        hour=18, minute=42, second=0, microsecond=0
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CHECK_IN_PERSON,
+        {"person": PERSON_ENTITY, "stay_from": arrival.isoformat()},
+        blocking=True,
+    )
+
+    submitted = client.actions.check_in_tourist.await_args.args[0]
+    payload = submitted.to_payload()
+    # StayFrom is YYYYMMDD; TimeStayFrom is HH:MM. Both reflect the
+    # backdated arrival, not now().
+    assert payload["StayFrom"] == arrival.strftime("%Y%m%d")
+    assert payload["TimeStayFrom"] == arrival.strftime("%H:%M")

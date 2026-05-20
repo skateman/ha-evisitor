@@ -34,6 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 ATTR_PERSON = "person"
 ATTR_FORESEEN_STAY_UNTIL = "foreseen_stay_until"
 ATTR_STAY_DAYS = "stay_days"
+ATTR_STAY_FROM = "stay_from"
 ATTR_REASON = "reason"
 ATTR_CHECK_OUT_AT = "check_out_at"
 
@@ -86,6 +87,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             new_id = await coord.check_in_person(
                 person,
                 foreseen_stay_until=call.data.get(ATTR_FORESEEN_STAY_UNTIL),
+                stay_from=call.data.get(ATTR_STAY_FROM),
             )
         except EVisitorError as err:
             _fire(hass, EVENT_CHECK_IN_FAILED, person, error=str(err))
@@ -139,7 +141,10 @@ def async_register_services(hass: HomeAssistant) -> None:
         _fire(hass, EVENT_EXTEND_SUCCEEDED, person, check_in_id=check_in_id)
 
     schema_check_in = _PERSON_SCHEMA.extend(
-        {vol.Optional(ATTR_FORESEEN_STAY_UNTIL): cv.datetime}
+        {
+            vol.Optional(ATTR_FORESEEN_STAY_UNTIL): cv.datetime,
+            vol.Optional(ATTR_STAY_FROM): cv.datetime,
+        }
     )
     schema_check_out = _PERSON_SCHEMA.extend(
         {vol.Optional(ATTR_CHECK_OUT_AT): cv.datetime}

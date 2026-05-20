@@ -82,6 +82,12 @@ action:
   - service: evisitor.check_out_person
     data:
       person: "{{ trigger.entity_id }}"
+      # When the person actually left home, not when the grace period
+      # finished. ``trigger.from_state.last_changed`` is the timestamp
+      # of the most recent state change *out of* "home", which is
+      # exactly the home → not-home transition that started this
+      # trigger's countdown.
+      check_out_at: "{{ trigger.from_state.last_changed.isoformat() }}"
 
 mode: parallel
 max: 10

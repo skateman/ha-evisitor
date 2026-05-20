@@ -309,6 +309,7 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         person_entity_id: str,
         *,
         foreseen_stay_until: datetime | None = None,
+        stay_from: datetime | None = None,
     ) -> str:
         opts = self.person_options(person_entity_id)
         if opts is None:
@@ -341,14 +342,22 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"current or cancelled prijava -- please re-map the person."
             )
 
+        # Arrival timestamp -- caller may backdate it (e.g. an auto-checkin
+        # blueprint passing the trigger's last_changed instead of "now",
+        # so the registered StayFrom matches when the guest actually got
+        # home rather than when presence-debounce fired). eVisitor's
+        # server allows StayFrom up to ~14 days in the past (the per-account
+        # `AllowedNumberOfDaysToCheckInCheckOut` parameter) -- well outside
+        # any realistic debounce window.
+        arrival = (stay_from or dt_util.now()).replace(microsecond=0)
         window = (
             StayWindow(
-                stay_from=dt_util.now().replace(microsecond=0),
+                stay_from=arrival,
                 foreseen_stay_until=foreseen_stay_until,
             )
             if foreseen_stay_until is not None
             else StayWindow.default_from_now(
-                now=dt_util.now(),
+                now=arrival,
                 stay_duration=self.stay_duration,
                 check_out_time=self.check_out_time_str,
             )

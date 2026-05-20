@@ -20,6 +20,18 @@ check_in_person:
       required: false
       selector:
         datetime:
+    stay_from:
+      name: Stay from
+      description: >-
+        Optional arrival datetime. Defaults to "now". Set this when
+        registering retrospectively -- e.g. an auto-check-in
+        automation triggered by presence-debounce should pass the
+        actual home-arrival time (trigger.to_state.last_changed) so
+        the registered StayFrom matches reality. The server allows
+        StayFrom up to ~14 days in the past.
+      required: false
+      selector:
+        datetime:
 
 check_out_person:
   name: Check out (HA person)

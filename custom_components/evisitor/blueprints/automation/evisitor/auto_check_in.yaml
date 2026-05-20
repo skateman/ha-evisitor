@@ -75,6 +75,11 @@ action:
           - service: evisitor.check_in_person
             data:
               person: "{{ trigger.entity_id }}"
+              # Actual moment the person became "home", not the
+              # moment presence-debounce decided we should fire. The
+              # eVisitor server allows StayFrom up to ~14 days back,
+              # so any realistic debounce window is safe.
+              stay_from: "{{ trigger.to_state.last_changed.isoformat() }}"
               foreseen_stay_until: >-
                 {%- set parts = (check_out_time | default('10:00')).split(':') -%}
                 {%- set hh = parts[0] | int(10) -%}
@@ -84,6 +89,7 @@ action:
       - service: evisitor.check_in_person
         data:
           person: "{{ trigger.entity_id }}"
+          stay_from: "{{ trigger.to_state.last_changed.isoformat() }}"
 
 mode: parallel
 max: 10
