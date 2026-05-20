@@ -8,6 +8,6 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/skateman/ha-evisitor/issues",
-  "requirements": ["pyevisitor==0.4.1"],
+  "requirements": ["pyevisitor==0.5.0"],
   "version": "0.5.0"
 }
