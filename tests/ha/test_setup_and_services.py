@@ -106,6 +106,10 @@ async def test_check_in_service_dispatches_and_emits_success_event(
         {"person": PERSON_ENTITY},
         blocking=True,
     )
+    # Drain pending bus dispatches before asserting on `received` --
+    # bus.async_fire is queued, not synchronous. Same race we fixed
+    # earlier for the failure-event tests; missed this one then.
+    await hass.async_block_till_done()
 
     # The mocked client got the POST.
     assert client.actions.check_in_tourist.await_count == 1
