@@ -522,3 +522,69 @@ async def test_check_in_with_stay_from_backdates_the_payload(
     # backdated arrival, not now().
     assert payload["StayFrom"] == arrival.strftime("%Y%m%d")
     assert payload["TimeStayFrom"] == arrival.strftime("%H:%M")
+
+
+async def test_calendar_shows_checked_out_stays_as_historical_events(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """The calendar entity must keep checked-out prijave visible as
+    historical events. A check-out closes the stay but it should not
+    vanish from the calendar UI -- the user still wants to see who
+    stayed last week.
+
+    Regression for the 0.3.0 calendar bug where _all_events() read
+    from ``active_stays`` (post-checkout-filter) instead of
+    ``all_stays``.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    # Fixture has Novák Marek with CheckedOutTourist=True. We use it
+    # verbatim -- this exact shape is what would have caused them to
+    # disappear from the calendar pre-fix.
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ENVIRONMENT: "production",
+            CONF_USERNAME: "u",
+            CONF_PASSWORD: "p",
+            CONF_API_KEY: "",
+            CONF_FACILITY_CODE: "0000001",
+        },
+        options={CONF_PERSON_MAP: {PERSON_ENTITY: PERSON_OPTIONS}},
+    )
+    entry.add_to_hass(hass)
+    client = fake_client_factory()
+    # Both fixture guests already have CheckedOutTourist=True.
+    assert all(g.latest["CheckedOutTourist"] for g in fake_unique_guests)
+
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # Ask the calendar for events over a wide range that brackets
+        # the synthetic fixture window (epoch-millis 1899900000000+0100
+        # = 2030-03-19 area). Any range that contains the fixture
+        # dates would work; we just want to cover everything.
+        calendar_state = hass.states.get("calendar.guests")
+        assert calendar_state is not None
+
+        # Fetch via the entity's API directly.
+        from custom_components.evisitor.calendar import EVisitorFacilityCalendar
+
+        coord = hass.data[DOMAIN][entry.entry_id]
+        cal = EVisitorFacilityCalendar(coord)
+        events = await cal.async_get_events(
+            hass,
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            datetime(2040, 1, 1, tzinfo=timezone.utc),
+        )
+
+        # Both checked-out fixture guests must surface as events.
+        summaries = {e.summary for e in events}
+        assert summaries == {"Nováková Eva", "Novák Marek"}
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()

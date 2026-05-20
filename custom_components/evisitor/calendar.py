@@ -73,9 +73,15 @@ class EVisitorFacilityCalendar(
     # --- internal ---------------------------------------------------------
 
     def _all_events(self) -> list[CalendarEvent]:
-        active = (self.coordinator.data or {}).get("active_stays") or []
+        # Read from all_stays (every prijava the coordinator's last refresh
+        # returned) rather than active_stays (only the still-checked-in
+        # ones). A check-out closes a stay but the calendar should keep
+        # showing it as a historical event -- otherwise guests vanish
+        # from the calendar UI the moment they leave, which is jarring
+        # and loses the "what happened last week" view.
+        stays = (self.coordinator.data or {}).get("all_stays") or []
         events: list[CalendarEvent] = []
-        for stay in active:
+        for stay in stays:
             start = _dt_or_none(stay.get("TimeStayFrom") or stay.get("StayFrom"))
             end = _dt_or_none(
                 stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil")
