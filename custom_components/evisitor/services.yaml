@@ -105,3 +105,11 @@ extend_stay:
           min: 1
           max: 30
           mode: box
+
+purge_calendar_history:
+  name: Purge calendar history
+  description: >-
+    Wipe the local on-disk archive of past calendar events. Only useful
+    when the "Persist calendar history to disk" setting has been used
+    at least once. Always succeeds (no-op if there's nothing to purge).
+    Applies to every eVisitor integration entry currently loaded.

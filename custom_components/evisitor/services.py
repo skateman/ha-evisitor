@@ -26,6 +26,7 @@ from .const import (
     SERVICE_CHECK_IN_PERSON,
     SERVICE_CHECK_OUT_PERSON,
     SERVICE_EXTEND_STAY,
+    SERVICE_PURGE_CALENDAR_HISTORY,
 )
 from .coordinator import EVisitorCoordinator
 
@@ -166,6 +167,21 @@ def async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_CANCEL_CHECK_IN, _cancel, schema=schema_cancel)
     hass.services.async_register(DOMAIN, SERVICE_EXTEND_STAY, _extend, schema=schema_extend)
 
+    async def _purge_calendar_history(call: ServiceCall) -> None:
+        """Wipe the persisted calendar archive for every loaded entry.
+
+        Idempotent: no-op if persistence was never enabled or the
+        archive is already empty.
+        """
+        for coord in hass.data.get(DOMAIN, {}).values():
+            cal = getattr(coord, "calendar_entity", None)
+            if cal is not None:
+                await cal.async_purge_archive()
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_PURGE_CALENDAR_HISTORY, _purge_calendar_history
+    )
+
 
 def async_unregister_services(hass: HomeAssistant) -> None:
     for name in (
@@ -173,5 +189,6 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_CHECK_OUT_PERSON,
         SERVICE_CANCEL_CHECK_IN,
         SERVICE_EXTEND_STAY,
+        SERVICE_PURGE_CALENDAR_HISTORY,
     ):
         hass.services.async_remove(DOMAIN, name)

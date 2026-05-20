@@ -588,3 +588,177 @@ async def test_calendar_shows_checked_out_stays_as_historical_events(
 
         await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
+
+
+async def test_calendar_archive_persists_across_restart_when_enabled(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """Persisted calendar history must survive an integration reload.
+
+    When ``persist_calendar_history`` is enabled, each coordinator
+    refresh writes the seen prijave to .storage. After a reload the
+    archive is loaded and supplements the live data, so a stay that
+    no longer comes back from eVisitor (e.g. it got archived
+    server-side) still shows in the calendar.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from custom_components.evisitor.calendar import EVisitorFacilityCalendar
+    from custom_components.evisitor.const import (
+        CONF_SETTINGS,
+        SETTING_PERSIST_CALENDAR,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ENVIRONMENT: "production",
+            CONF_USERNAME: "u",
+            CONF_PASSWORD: "p",
+            CONF_API_KEY: "",
+            CONF_FACILITY_CODE: "0000001",
+        },
+        options={
+            CONF_PERSON_MAP: {PERSON_ENTITY: PERSON_OPTIONS},
+            CONF_SETTINGS: {SETTING_PERSIST_CALENDAR: True},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    client = fake_client_factory()
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        # First setup: archive seeded by the fixture stays.
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        coord = hass.data[DOMAIN][entry.entry_id]
+        cal: EVisitorFacilityCalendar = coord.calendar_entity
+        assert cal is not None
+        assert cal._archive  # something was persisted
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # Now simulate eVisitor losing both fixture stays (the server
+        # archived them). On reload, the live data is empty -- but the
+        # archive should still surface them.
+        client2 = fake_client_factory()
+        client2.guests.unique.return_value = []
+        client2.guests.stays.return_value = []
+
+        with patch(
+            "custom_components.evisitor.coordinator.EVisitorClient",
+            return_value=client2,
+        ):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+
+            coord2 = hass.data[DOMAIN][entry.entry_id]
+            cal2: EVisitorFacilityCalendar = coord2.calendar_entity
+            assert cal2 is not None
+            # Live data is empty.
+            assert (coord2.data or {}).get("all_stays") == []
+            # ...but the calendar still serves the archived entries.
+            events = await cal2.async_get_events(
+                hass,
+                datetime(2020, 1, 1, tzinfo=timezone.utc),
+                datetime(2040, 1, 1, tzinfo=timezone.utc),
+            )
+            summaries = {e.summary for e in events}
+            assert summaries == {"Nováková Eva", "Novák Marek"}
+
+            await hass.config_entries.async_unload(entry.entry_id)
+            await hass.async_block_till_done()
+
+
+async def test_calendar_archive_not_written_when_disabled(
+    hass: HomeAssistant, fake_client_factory
+) -> None:
+    """Default behaviour (persistence off) must not write to .storage."""
+    from unittest.mock import patch
+
+    from custom_components.evisitor.calendar import EVisitorFacilityCalendar
+
+    # No CONF_SETTINGS at all -> SETTING_PERSIST_CALENDAR defaults to False.
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ENVIRONMENT: "production",
+            CONF_USERNAME: "u",
+            CONF_PASSWORD: "p",
+            CONF_API_KEY: "",
+            CONF_FACILITY_CODE: "0000001",
+        },
+        options={CONF_PERSON_MAP: {PERSON_ENTITY: PERSON_OPTIONS}},
+    )
+    entry.add_to_hass(hass)
+
+    client = fake_client_factory()
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        coord = hass.data[DOMAIN][entry.entry_id]
+        cal: EVisitorFacilityCalendar = coord.calendar_entity
+        # Archive is empty; sync was a no-op.
+        assert cal._archive == {}
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+
+async def test_purge_calendar_history_service_wipes_archive(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """The purge service wipes the on-disk archive (idempotent)."""
+    from unittest.mock import patch
+
+    from custom_components.evisitor.calendar import EVisitorFacilityCalendar
+    from custom_components.evisitor.const import (
+        CONF_SETTINGS,
+        SETTING_PERSIST_CALENDAR,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ENVIRONMENT: "production",
+            CONF_USERNAME: "u",
+            CONF_PASSWORD: "p",
+            CONF_API_KEY: "",
+            CONF_FACILITY_CODE: "0000001",
+        },
+        options={
+            CONF_PERSON_MAP: {PERSON_ENTITY: PERSON_OPTIONS},
+            CONF_SETTINGS: {SETTING_PERSIST_CALENDAR: True},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    client = fake_client_factory()
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        coord = hass.data[DOMAIN][entry.entry_id]
+        cal: EVisitorFacilityCalendar = coord.calendar_entity
+        assert cal._archive  # seeded
+
+        await hass.services.async_call(
+            DOMAIN, "purge_calendar_history", {}, blocking=True
+        )
+
+        assert cal._archive == {}
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()

@@ -233,7 +233,7 @@ Two values that the past-stay browse data does not carry -- ``arrival_organisati
 The **TT payment category** (boravišna pristojba category — controls whether tourist tax is owed for the stay) is recovered from the past
 stay's ``Note`` field via the lookup table. If the note doesn't parse or is missing, the integration falls back to **code 18** — ``Vlasnici kuće za odmor i članovi njegove obitelji`` ("owners of the holiday house and members of their family"). This is the right default for the integration's intended use case: HA ``person.*`` entities track household members, who in this scenario are the owner's family. Friends of the owner (code 16) and paying tourists (code 14) are deliberately *not* the fallback, because the integration has no way to recognise them automatically — those check-ins should go through other channels (the eVisitor portal, or future ad-hoc-guest support).
 
-Restarting HA wipes the in-memory cache; the next coordinator update re-fetches it. Calendar event titles render the live name from this in-memory snapshot but never persist it.
+Restarting HA wipes the in-memory cache; the next coordinator update re-fetches it. Calendar event titles render the live name from this in-memory snapshot but never persist it -- **unless** you opt into `persist_calendar_history` in the settings (see below), in which case a minimal subset (name + age, dates, facility) is written to `.storage` so checked-out guests stay visible across restarts.
 
 The persisted seed is **auto-refreshed after every successful check-in** so the mapping survives eVisitor archiving older prijave (seed = whichever past-stay ID the integration most recently created for that person). The integration's update listener recognises a seed-only delta and skips the entry reload — adding or removing a person mapping still reloads (entities need (de)registration).
 
@@ -253,6 +253,13 @@ A menu under "Configure":
   - Coordinator scan interval (minutes, default 5)
   - Default stay duration (hours, default 48)
   - Default check-out time (`HH:MM`, default `10:00`)
+  - Persist calendar history to disk (bool, default **off**) — when **off** the calendar is in-memory-only; checked-out guests vanish from the calendar across restarts (until the next poll repopulates them) and eVisitor's eventual server-side archival of old prijave silently drops them. When **on**, each coordinator refresh upserts a minimal record per prijava into `<config>/.storage/evisitor_calendar_<entry_id>`:
+    - `summary` = `SurnameAndName` verbatim (e.g. `"Halász Dávid (35)"` — name + current age in parens; the age implies year-of-birth ± 1)
+    - `start` + `end` = stay datetimes
+    - `location` = facility name
+    - `uid` = opaque prijava UUID
+
+    **Not persisted, ever:** full DOB, document number/type, address, citizenship, country/city of birth, gender, phone, email, payment category. The persisted shape is exactly what the calendar UI already shows; the setting just controls disk vs. RAM. To wipe the archive, call the `evisitor.purge_calendar_history` service.
 
   Times are validated `HH:MM` 24-hour. Saving these triggers a normal entry reload to apply the new schedule + scan interval.
 
@@ -270,6 +277,7 @@ A menu under "Configure":
 | `evisitor.check_out_person` | `CheckOutTourist` against the active prijava resolved from coordinator state. |
 | `evisitor.cancel_check_in` | `CancelTouristCheckIn` (poništavanje). |
 | `evisitor.extend_stay` | Re-`CheckInTourist` with same ID and a new `ForeseenStayUntil` (the "edit" path). Accepts either `foreseen_stay_until` (datetime) or `stay_days` (int — today + N days at the integration's default check-out time). |
+| `evisitor.purge_calendar_history` | Wipes the on-disk calendar archive (`<config>/.storage/evisitor_calendar_<entry_id>`). Idempotent — no-op if persistence was never enabled. Useful for testing, GDPR erasure requests, or just resetting to a clean slate. Takes no arguments; runs against every loaded eVisitor entry. |
 
 Each service fires a corresponding `evisitor_*_succeeded` / `evisitor_*_failed` event so user automations can react / notify.
 

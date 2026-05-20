@@ -32,11 +32,13 @@ from .const import (
     CONF_PERSON_MAP,
     CONF_SETTINGS,
     DEFAULT_CHECK_OUT_TIME,
+    DEFAULT_PERSIST_CALENDAR,
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DEFAULT_STAY_DURATION_HOURS,
     DOMAIN,
     KEY_CHECK_IN_ID_SEED,
     SETTING_CHECK_OUT_TIME,
+    SETTING_PERSIST_CALENDAR,
     SETTING_SCAN_INTERVAL_MINUTES,
     SETTING_STAY_DURATION_HOURS,
 )
@@ -343,6 +345,12 @@ def _settings_schema(existing: dict[str, Any]) -> vol.Schema:
                     SETTING_CHECK_OUT_TIME, DEFAULT_CHECK_OUT_TIME
                 ),
             ): str,
+            vol.Optional(
+                SETTING_PERSIST_CALENDAR,
+                default=existing.get(
+                    SETTING_PERSIST_CALENDAR, DEFAULT_PERSIST_CALENDAR
+                ),
+            ): bool,
         }
     )
 
