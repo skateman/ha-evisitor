@@ -183,6 +183,12 @@ variables:
   check_out_action_label: !input check_out_action_label
   keep_in_action_label: !input keep_in_action_label
   notification_timeout_minutes: !input notification_timeout_minutes
+  # Resolved here so the companion-only `service:` field below renders
+  # via a template (runtime) instead of being substituted literally at
+  # blueprint-instantiate time. An empty default for telegram users
+  # would otherwise trip Home Assistant's static service-name
+  # validator before the dead companion branch is ever reached.
+  notify_service_name: !input notify_service
   # Slash-prefixed so the same string works as a Telegram callback_data
   # (which conventionally looks like a /command) and as a Companion
   # action ID (which accepts any string).
@@ -225,7 +231,7 @@ action:
               - conditions:
                   - "{{ platform == 'companion' }}"
                 sequence:
-                  - service: !input notify_service
+                  - service: "{{ notify_service_name }}"
                     data:
                       title: "{{ notification_title }}"
                       message: "{{ rendered_message }}"
@@ -322,7 +328,7 @@ action:
               - conditions:
                   - "{{ platform == 'companion' }}"
                 sequence:
-                  - service: !input notify_service
+                  - service: "{{ notify_service_name }}"
                     data:
                       title: "{{ notification_title }}"
                       message: "{{ rendered_message }}"

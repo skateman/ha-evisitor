@@ -14,8 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from homeassistant.components.blueprint.models import Blueprint
+from homeassistant.components.automation.config import async_validate_config_item
+from homeassistant.components.blueprint.models import Blueprint, BlueprintInputs
 from homeassistant.components.blueprint.schemas import BLUEPRINT_SCHEMA
+from homeassistant.core import HomeAssistant
 from homeassistant.util import yaml as ha_yaml
 
 BLUEPRINT_DIR = (
@@ -91,3 +93,69 @@ def test_blueprint_inputs_match_expected_set(
         schema=BLUEPRINT_SCHEMA,
     )
     assert set((blueprint.inputs or {}).keys()) == expected_inputs
+
+
+@pytest.mark.parametrize(
+    "filename,inputs",
+    [
+        # Regression for the bug where an empty `notify_service` default
+        # (the Telegram path) trips HA's static service-name validator
+        # because `service: !input notify_service` substitutes literally
+        # to `service: ""` even when the companion branch is dead.
+        (
+            "auto_check_in.yaml",
+            {
+                "person": ["person.demo_user"],
+                "platform": "telegram",
+                "telegram_chat_id": "123456",
+                "presence_debounce_minutes": 15,
+                "stay_days": 2,
+                "notification_timeout_minutes": 120,
+            },
+        ),
+        (
+            "auto_check_out.yaml",
+            {
+                "person": ["person.demo_user"],
+                "platform": "telegram",
+                "telegram_chat_id": "123456",
+                "notification_timeout_minutes": 60,
+            },
+        ),
+    ],
+)
+async def test_blueprint_substitutes_and_validates_with_telegram_defaults(
+    hass: HomeAssistant, filename: str, inputs: dict
+) -> None:
+    """Instantiate each blueprint with platform=telegram and
+    ``notify_service`` left at its empty default, then run the
+    substituted YAML through the automation config validator. This
+    is the exact path that fails when ``service: !input notify_service``
+    inlines to ``service: ""`` at parse time."""
+    path = BLUEPRINT_DIR / filename
+    raw = ha_yaml.load_yaml(str(path))
+    blueprint = Blueprint(
+        raw,
+        expected_domain="automation",
+        path=str(path),
+        schema=BLUEPRINT_SCHEMA,
+    )
+
+    blueprint_inputs = BlueprintInputs(
+        blueprint,
+        {
+            "use_blueprint": {
+                "path": filename,
+                "input": inputs,
+            },
+            "alias": "regression-test",
+        },
+    )
+    blueprint_inputs.validate()
+    substituted = blueprint_inputs.async_substitute()
+
+    # If the companion branch's `service:` field still inlined to ""
+    # this call raises with the user-reported "Service does not match
+    # format <domain>.<name>" error.
+    validated = await async_validate_config_item(hass, "regression-test", substituted)
+    assert validated is not None
