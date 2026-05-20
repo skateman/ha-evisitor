@@ -281,11 +281,11 @@ Each service fires a corresponding `evisitor_*_succeeded` / `evisitor_*_failed` 
 
 ### The integration never writes to eVisitor on its own
 
-Every POST to eVisitor (check-in, check-out, cancel, extend) happens ÷*only** in response to an explicit `evisitor.*` service call. The coordinator's periodic refresh is read-only (browses + lookups only). Anything that should "happen automatically" — auto check-in on arrival, auto check-out after a grace period, nightly sliding extension of an open-ended stay — is wired up by you, the user, via Home Assistant automations. To make that easy, the integration ships four **blueprints** covering the standard patterns; you import them once and click *Create automation* to instantiate them.
+Every POST to eVisitor (check-in, check-out, cancel, extend) happens ÷*only** in response to an explicit `evisitor.*` service call. The coordinator's periodic refresh is read-only (browses + lookups only). Anything that should "happen automatically" — auto check-in on arrival, auto check-out after a grace period, nightly sliding extension of an open-ended stay — is wired up by you, the user, via Home Assistant automations. To make that easy, the integration ships three **blueprints** covering the standard patterns; you import them once and click *Create automation* to instantiate them.
 
 ### Shipped automation blueprints
 
-Four automation blueprints ship with the integration. They live under `custom_components/evisitor/blueprints/automation/evisitor/` (so they travel together with the integration when you copy / pull updates), and each one declares a public `source_url:` pointing at its raw GitHub URL so end users can import them with one click via Home Assistant's standard *Import blueprint* workflow.
+Three automation blueprints ship with the integration. They live under `custom_components/evisitor/blueprints/automation/evisitor/` (so they travel together with the integration when you copy / pull updates), and each one declares a public `source_url:` pointing at its raw GitHub URL so end users can import them with one click via Home Assistant's standard *Import blueprint* workflow.
 
 #### Importing into Home Assistant
 
@@ -294,12 +294,11 @@ Four automation blueprints ship with the integration. They live under `custom_co
 3. Paste the raw GitHub URL of the blueprint you want, then click *Preview blueprint* → *Import blueprint*. The YAML is downloaded, validated, and saved to `<config>/blueprints/automation/evisitor/`. 
 4. Click **Create automation** on the imported blueprint, fill in the inputs, save.
 
-The four URLs:
+The three URLs:
 
 ```
 https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/auto_check_in.yaml
-https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/auto_check_out_after_grace.yaml
-https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/confirm_check_in_actionable.yaml
+https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/auto_check_out.yaml
 https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/nightly_sliding_extender.yaml
 ```
 
@@ -311,14 +310,31 @@ If you keep your config in git, you can also drop the YAML files manually into `
 
 | Blueprint | Inputs |
 |---|---|
-| `auto_check_in.yaml` | `person` (one or many), `presence_debounce_minutes` (default 1), `stay_days` (default 0 = use integration's 48 h default), `check_out_time` (default `10:00`, applied when `stay_days ≥ 1`). |
-| `confirm_check_in_actionable.yaml` | All of the above plus `notify_service`, `notification_title`, `notification_message` (use `{name}` placeholder), `check_in_action_label`, `skip_action_label`, `notification_timeout_minutes` (default 60). |
-| `auto_check_out_after_grace.yaml` | `person` (one or many), `grace_minutes` (default 60, range 5–1440), `only_during_window` (bool, default false), `window_start` / `window_end` (`HH:MM`, defaults `08:00`/`23:00`) — guards against nighttime presence blips triggering a real check-out. |
+| `auto_check_in.yaml` | `person` (one or many), `mode` (`silent` / `notify` / `confirm`, default `confirm`), `presence_debounce_minutes` (default 1), `stay_days` (default 0 = use integration's 48 h default), `check_out_time` (default `10:00`, applied when `stay_days ≥ 1`), `platform` (`companion` / `telegram`, default `companion`, used for `notify` + `confirm`), `notify_service` (Companion only), `telegram_chat_id` (Telegram only), `notification_title`, `notification_message` (use `{name}` placeholder), `check_in_action_label`, `skip_action_label`, `notification_timeout_minutes` (default 60, `confirm` mode only). See the *Modes and platforms* subsection below for what each mode does. |
+| `auto_check_out.yaml` | `person` (one or many), `mode` (`silent` / `notify` / `confirm`, default `confirm`), `grace_minutes` (default 60, range 5–1440), `only_during_window` (bool, default false), `window_start` / `window_end` (`HH:MM`, defaults `08:00`/`23:00`) — guards against nighttime presence blips triggering a real check-out, `platform` (`companion` / `telegram`, default `companion`, used for `notify` + `confirm`), `notify_service` (Companion only), `telegram_chat_id` (Telegram only), `notification_title`, `notification_message` (use `{name}` placeholder), `check_out_action_label`, `keep_in_action_label`, `notification_timeout_minutes` (default 60, `confirm` mode only). Same three-mode design as `auto_check_in.yaml` — see the *Modes and platforms* subsection below. |
 | `nightly_sliding_extender.yaml` | `person` (one or many), `schedule` (time, default `00:05:00`), `stay_days` (default 2 — today + N days at the integration's default check-out time), `only_if_home` (bool, default true). Replaces the old built-in extender; recommended for any open-ended stay so the prijava never expires while the guest is home. |
 
-All four run in `mode: parallel` so concurrent state changes from multiple persons don't block each other.
+All three run in `mode: parallel` so concurrent state changes from multiple persons don't block each other.
 
-Both modes (auto and confirm-via-notification) just become user automations chosen from these blueprints — no extra integration code required.
+#### Modes and platforms (auto_check_in + auto_check_out)
+
+The two presence-triggered blueprints share an identical three-mode UX via their `mode` input:
+
+| mode | What happens on the trigger |
+|---|---|
+| **silent** | The mapped person is checked in (or out) immediately. No notification. |
+| **notify** | The mapped person is checked in (or out) immediately, **then** a passive notification fires telling you it happened. |
+| **confirm** (default) | A notification with two buttons fires first (Check in / Skip on arrival; Check out / Keep them on departure). The action only fires on the affirmative button; on the negative button or on timeout (after `notification_timeout_minutes`) nothing is registered. |
+
+For `notify` and `confirm`, two notification platforms are supported via the `platform` input:
+
+- **HA Companion app** (default) — push notification via your `notify.mobile_app_*` service; buttons render natively on the lockscreen.
+- **Telegram** — message via `telegram_bot.send_message` with an inline keyboard; buttons render inside the Telegram chat. To use Telegram:
+  1. Configure HA's [Telegram bot integration](https://www.home-assistant.io/integrations/telegram_bot/) (create a bot via @BotFather, register its token in HA, whitelist your chat IDs).
+  2. Get your numeric chat ID from @userinfobot on Telegram. For group chats the ID is negative.
+  3. In the blueprint's *Create automation* form, set `Notification platform` → `Telegram bot`, `Telegram chat ID` → the numeric ID, and leave `Companion notify service` blank.
+
+Both blueprints always pass the actual presence-transition timestamp to the integration's service (`stay_from = trigger.to_state.last_changed` on the way in, `check_out_at = trigger.from_state.last_changed` on the way out), so the registered prijava's `StayFrom` / check-out time matches reality — not the debounced / grace-period trigger time, not when the user tapped a button.
 
 ### Tests
 
