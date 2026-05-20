@@ -24,18 +24,12 @@ KEY_CHECK_IN_ID_SEED = "check_in_id_seed"
 SETTING_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
 SETTING_STAY_DURATION_HOURS = "default_stay_duration_hours"
 SETTING_CHECK_OUT_TIME = "default_check_out_time"
-SETTING_PERSIST_CALENDAR = "persist_calendar_history"
 
 # --- Defaults (used when the corresponding setting is unset) ---------------
 
 DEFAULT_SCAN_INTERVAL_MINUTES = 5
 DEFAULT_STAY_DURATION_HOURS = 48
 DEFAULT_CHECK_OUT_TIME = "10:00"
-# Calendar history persistence is opt-in. Off keeps the original
-# privacy model (no PII at rest); on writes name + age + dates + facility
-# (not DOB, document number, address etc.) to .storage so checked-out
-# guests stay visible across HA restarts and after eVisitor archives them.
-DEFAULT_PERSIST_CALENDAR = False
 
 # Convenience timedeltas built from the defaults above; not used as
 # settings storage, just as fallbacks where a timedelta is wanted.
@@ -49,7 +43,6 @@ SERVICE_CHECK_IN_PERSON = "check_in_person"
 SERVICE_CHECK_OUT_PERSON = "check_out_person"
 SERVICE_CANCEL_CHECK_IN = "cancel_check_in"
 SERVICE_EXTEND_STAY = "extend_stay"
-SERVICE_PURGE_CALENDAR_HISTORY = "purge_calendar_history"
 
 # --- Event names ------------------------------------------------------------
 

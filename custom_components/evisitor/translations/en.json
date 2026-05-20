@@ -42,8 +42,7 @@
         "data": {
           "scan_interval_minutes": "Coordinator scan interval (minutes)",
           "default_stay_duration_hours": "Default stay duration (hours)",
-          "default_check_out_time": "Default check-out time (HH:MM)",
-          "persist_calendar_history": "Persist calendar history to disk (writes guest names + dates to .storage)"
+          "default_check_out_time": "Default check-out time (HH:MM)"
         }
       },
       "add_person": {

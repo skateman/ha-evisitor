@@ -82,9 +82,6 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._lookups_loaded_at: datetime | None = None
         self._lookup_cache: dict[str, list[dict[str, Any]]] = {}
         self._facility_id: str | None = None
-        # Set by the calendar entity in async_added_to_hass so service
-        # handlers can reach it without going through the entity registry.
-        self.calendar_entity: Any = None
 
     # ------------------------------------------------------------------
     # Lifecycle
