@@ -105,3 +105,39 @@ extend_stay:
           min: 1
           max: 30
           mode: box
+
+purge_calendar_archive:
+  name: Purge calendar archive
+  description: >-
+    Wipe every persisted historical event from the local calendar
+    archive. The live tier (currently visible prijave) is unaffected;
+    on the next coordinator poll any checked-out stays still returned
+    by eVisitor will land in the archive again.
+  fields:
+    config_entry_id:
+      name: Config entry
+      description: >-
+        Optional. Restricts the action to a single eVisitor entry.
+        Leave empty to purge every loaded entry's archive.
+      required: false
+      selector:
+        config_entry:
+          integration: evisitor
+
+rebuild_calendar_archive:
+  name: Rebuild calendar archive
+  description: >-
+    Purge the archive and immediately trigger a coordinator refresh.
+    The fresh snapshot's checked-out stays repopulate the archive in
+    one step. Useful after restoring a backup or correcting an
+    eVisitor-side cancellation.
+  fields:
+    config_entry_id:
+      name: Config entry
+      description: >-
+        Optional. Restricts the action to a single eVisitor entry.
+        Leave empty to rebuild every loaded entry's archive.
+      required: false
+      selector:
+        config_entry:
+          integration: evisitor

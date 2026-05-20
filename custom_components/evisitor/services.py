@@ -26,6 +26,8 @@ from .const import (
     SERVICE_CHECK_IN_PERSON,
     SERVICE_CHECK_OUT_PERSON,
     SERVICE_EXTEND_STAY,
+    SERVICE_PURGE_CALENDAR_ARCHIVE,
+    SERVICE_REBUILD_CALENDAR_ARCHIVE,
 )
 from .coordinator import EVisitorCoordinator
 
@@ -37,6 +39,7 @@ ATTR_STAY_DAYS = "stay_days"
 ATTR_STAY_FROM = "stay_from"
 ATTR_REASON = "reason"
 ATTR_CHECK_OUT_AT = "check_out_at"
+ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 
 
 _PERSON_SCHEMA = vol.Schema(
@@ -56,6 +59,25 @@ def _coordinator_for(
     raise ServiceValidationError(
         f"No eVisitor integration is configured for {person_entity_id!r}"
     )
+
+
+def _coordinators(
+    hass: HomeAssistant, entry_id: str | None
+) -> list[EVisitorCoordinator]:
+    """Resolve targeted coordinators.
+
+    With no ``entry_id`` the service operates on every loaded entry;
+    typical setups have a single entry, so this is the natural default.
+    """
+    by_entry: dict[str, EVisitorCoordinator] = hass.data.get(DOMAIN, {})
+    if entry_id is None:
+        return list(by_entry.values())
+    coord = by_entry.get(entry_id)
+    if coord is None:
+        raise ServiceValidationError(
+            f"No loaded eVisitor entry with id {entry_id!r}"
+        )
+    return [coord]
 
 
 def _fire(
@@ -160,11 +182,39 @@ def async_register_services(hass: HomeAssistant) -> None:
             ),
         }
     )
+    schema_archive = vol.Schema(
+        {vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string},
+        extra=vol.ALLOW_EXTRA,
+    )
+
+    async def _purge_archive(call: ServiceCall) -> None:
+        entry_id = call.data.get(ATTR_CONFIG_ENTRY_ID)
+        for coord in _coordinators(hass, entry_id):
+            if coord.archive.purge():
+                await coord.archive.async_save()
+            # Refresh listeners so the calendar redraws.
+            coord.async_update_listeners()
+
+    async def _rebuild_archive(call: ServiceCall) -> None:
+        entry_id = call.data.get(ATTR_CONFIG_ENTRY_ID)
+        for coord in _coordinators(hass, entry_id):
+            if coord.archive.purge():
+                await coord.archive.async_save()
+            # Refetch from eVisitor; the regular sync step in
+            # _async_update_data will repopulate the archive from the
+            # checked-out subset of the fresh snapshot.
+            await coord.async_request_refresh()
 
     hass.services.async_register(DOMAIN, SERVICE_CHECK_IN_PERSON, _check_in, schema=schema_check_in)
     hass.services.async_register(DOMAIN, SERVICE_CHECK_OUT_PERSON, _check_out, schema=schema_check_out)
     hass.services.async_register(DOMAIN, SERVICE_CANCEL_CHECK_IN, _cancel, schema=schema_cancel)
     hass.services.async_register(DOMAIN, SERVICE_EXTEND_STAY, _extend, schema=schema_extend)
+    hass.services.async_register(
+        DOMAIN, SERVICE_PURGE_CALENDAR_ARCHIVE, _purge_archive, schema=schema_archive
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_REBUILD_CALENDAR_ARCHIVE, _rebuild_archive, schema=schema_archive
+    )
 
 
 def async_unregister_services(hass: HomeAssistant) -> None:
@@ -173,5 +223,7 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_CHECK_OUT_PERSON,
         SERVICE_CANCEL_CHECK_IN,
         SERVICE_EXTEND_STAY,
+        SERVICE_PURGE_CALENDAR_ARCHIVE,
+        SERVICE_REBUILD_CALENDAR_ARCHIVE,
     ):
         hass.services.async_remove(DOMAIN, name)

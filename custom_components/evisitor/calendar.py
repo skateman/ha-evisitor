@@ -1,4 +1,21 @@
-"""calendar entity -- one per facility, listing active prijave as events."""
+"""calendar entity -- one per facility, listing guest prijave as events.
+
+Combines two data sources:
+
+1. **Live tier** -- the coordinator's in-memory ``all_stays`` snapshot,
+   refreshed on every poll. Carries the freshest shape for currently
+   visible prijave (including any still-foreseen end-dates that may move
+   as stays get extended).
+
+2. **Archive tier** -- the persistent on-disk dump of past check-outs
+   (see :mod:`custom_components.evisitor.archive`). Survives Home
+   Assistant restarts and defends against future eVisitor changes that
+   might trim ``ListOfTouristsExtended``.
+
+Live wins on uid collision, so a stay that's still in the live snapshot
+displays its current shape rather than the snapshot we archived
+earlier.
+"""
 
 from __future__ import annotations
 
@@ -27,11 +44,7 @@ async def async_setup_entry(
 class EVisitorFacilityCalendar(
     CoordinatorEntity[EVisitorCoordinator], CalendarEntity
 ):
-    """A calendar of currently checked-in guests at the facility.
-
-    Events are derived from the coordinator's in-memory snapshot of
-    ``ListOfTouristsExtended``; nothing is persisted to .storage.
-    """
+    """A calendar of currently checked-in and historical guests."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "facility_calendar"
@@ -73,33 +86,61 @@ class EVisitorFacilityCalendar(
     # --- internal ---------------------------------------------------------
 
     def _all_events(self) -> list[CalendarEvent]:
-        # Read from all_stays (every prijava the coordinator's last refresh
-        # returned) rather than active_stays (only the still-checked-in
-        # ones). A check-out closes a stay but the calendar should keep
-        # showing it as a historical event -- otherwise guests vanish
-        # from the calendar UI the moment they leave, which is jarring
-        # and loses the "what happened last week" view.
+        """Return live + archived events, live winning on uid collision.
+
+        Reading ``all_stays`` (rather than ``active_stays``) keeps
+        checked-out guests visible until the next coordinator refresh
+        archives them; the archive tier then keeps showing them long
+        after the live tier moves on.
+        """
+        events: dict[str | None, CalendarEvent] = {}
+
+        # Archive tier first: live entries (added after) overwrite on
+        # uid collision, which is the desired "live wins" semantics.
+        for uid, archived in self.coordinator.archive.items():
+            event = _archive_event(uid, archived)
+            if event is not None:
+                events[uid] = event
+
         stays = (self.coordinator.data or {}).get("all_stays") or []
-        events: list[CalendarEvent] = []
         for stay in stays:
-            start = _dt_or_none(stay.get("TimeStayFrom") or stay.get("StayFrom"))
-            end = _dt_or_none(
-                stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil")
-            )
-            if start is None or end is None or end <= start:
-                continue
-            summary = stay.get("SurnameAndName") or "Guest"
-            events.append(
-                CalendarEvent(
-                    summary=summary,
-                    start=start,
-                    end=end,
-                    description=None,  # PII-by-default off
-                    location=stay.get("FacilityName"),
-                    uid=str(stay.get("ID")) if stay.get("ID") else None,
-                )
-            )
-        return events
+            event = _live_event(stay)
+            if event is not None:
+                events[event.uid] = event
+
+        return list(events.values())
+
+
+def _live_event(stay: dict[str, Any]) -> CalendarEvent | None:
+    start = _dt_or_none(stay.get("TimeStayFrom") or stay.get("StayFrom"))
+    end = _dt_or_none(
+        stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil")
+    )
+    if start is None or end is None or end <= start:
+        return None
+    return CalendarEvent(
+        summary=stay.get("SurnameAndName") or "Guest",
+        start=start,
+        end=end,
+        description=None,  # PII-by-default off
+        location=stay.get("FacilityName"),
+        uid=str(stay.get("ID")) if stay.get("ID") else None,
+    )
+
+
+def _archive_event(uid: str, archived: dict[str, Any]) -> CalendarEvent | None:
+    start = _iso_or_none(archived.get("start"))
+    end = _iso_or_none(archived.get("end"))
+    if start is None or end is None or end <= start:
+        return None
+    return CalendarEvent(
+        summary=archived.get("summary") or "Guest",
+        start=start,
+        end=end,
+        description=None,
+        location=archived.get("location"),
+        uid=uid,
+    )
 
 
 def _dt_or_none(value: Any) -> datetime | None:
@@ -109,3 +150,13 @@ def _dt_or_none(value: Any) -> datetime | None:
         return from_dotnet_date(value)
     except (ValueError, TypeError):
         return None
+
+
+def _iso_or_none(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+

@@ -43,6 +43,8 @@ SERVICE_CHECK_IN_PERSON = "check_in_person"
 SERVICE_CHECK_OUT_PERSON = "check_out_person"
 SERVICE_CANCEL_CHECK_IN = "cancel_check_in"
 SERVICE_EXTEND_STAY = "extend_stay"
+SERVICE_PURGE_CALENDAR_ARCHIVE = "purge_calendar_archive"
+SERVICE_REBUILD_CALENDAR_ARCHIVE = "rebuild_calendar_archive"
 
 # --- Event names ------------------------------------------------------------
 

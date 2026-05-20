@@ -30,6 +30,7 @@ from ._payload import (
     StayWindow,
     build_check_in_request,
 )
+from .archive import EvisitorArchive, event_from_stay
 from .const import (
     CONF_API_KEY,
     CONF_ENVIRONMENT,
@@ -82,6 +83,11 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._lookups_loaded_at: datetime | None = None
         self._lookup_cache: dict[str, list[dict[str, Any]]] = {}
         self._facility_id: str | None = None
+        # Persistent calendar archive. Loaded once during the first
+        # successful update; the sync step at the end of
+        # _async_update_data keeps it current.
+        self.archive = EvisitorArchive(hass, entry.entry_id)
+        self._archive_loaded = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -190,12 +196,73 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(str(err)) from err
 
         active = [s for s in stays if not s.get("CheckedOutTourist")]
+        # Persistent archive sync. Best-effort: any failure here logs but
+        # does not break the live update -- the live tier is the
+        # authoritative source for current state, the archive is just a
+        # defence-in-depth backup of historical check-outs.
+        await self._sync_archive(stays)
+
         return {
             "facility_id": self._facility_id,
             "active_stays": active,
             "all_stays": stays,
             "unique_guests": unique_guests,
         }
+
+    async def _sync_archive(self, stays: list[dict[str, Any]]) -> None:
+        """Persist checked-out stays to disk and drop cancelled ones.
+
+        Runs at the end of every successful poll. The first time it
+        runs after install/upgrade the archive is empty, so every
+        ``CheckedOutTourist=True`` row in the snapshot lands on disk in
+        one batch -- this is the implicit "backfill" the user asked
+        for; no separate phase is needed because the steady-state
+        upsert is itself idempotent.
+        """
+        try:
+            if not self._archive_loaded:
+                await self.archive.async_load()
+                self._archive_loaded = True
+
+            # Upsert every checked-out stay; same code path handles
+            # backfill (empty archive) and steady-state (occasional
+            # new additions).
+            for stay in stays:
+                if not stay.get("CheckedOutTourist"):
+                    continue
+                uid = stay.get("ID")
+                if not uid:
+                    continue
+                event = event_from_stay(stay)
+                if event is None:
+                    continue
+                self.archive.upsert(str(uid), event)
+
+            # Cancellation sweep: anything in TouristCancelledBrowse
+            # that we've previously archived must go. Cancellation of
+            # a checked-out prijava is rare but the integration would
+            # rather show nothing than a void event.
+            try:
+                cancelled_records = await self.client.browses.list_cancelled_tourists()
+            except EVisitorError:
+                _LOGGER.debug(
+                    "TouristCancelledBrowse fetch failed during archive sync",
+                    exc_info=True,
+                )
+            else:
+                records = (cancelled_records or {}).get("Records") or []
+                cancelled_uids = {
+                    str(r.get("ID")) for r in records if r.get("ID")
+                }
+                for uid in cancelled_uids & self.archive.uids():
+                    self.archive.discard(uid)
+
+            await self.archive.async_save()
+        except Exception:  # pragma: no cover - defensive
+            _LOGGER.warning(
+                "Calendar archive sync failed; live update unaffected",
+                exc_info=True,
+            )
 
     async def _maybe_refresh_lookups(self) -> None:
         now = dt_util.utcnow()

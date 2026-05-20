@@ -233,7 +233,7 @@ Two values that the past-stay browse data does not carry -- ``arrival_organisati
 The **TT payment category** (boravišna pristojba category — controls whether tourist tax is owed for the stay) is recovered from the past
 stay's ``Note`` field via the lookup table. If the note doesn't parse or is missing, the integration falls back to **code 18** — ``Vlasnici kuće za odmor i članovi njegove obitelji`` ("owners of the holiday house and members of their family"). This is the right default for the integration's intended use case: HA ``person.*`` entities track household members, who in this scenario are the owner's family. Friends of the owner (code 16) and paying tourists (code 14) are deliberately *not* the fallback, because the integration has no way to recognise them automatically — those check-ins should go through other channels (the eVisitor portal, or future ad-hoc-guest support).
 
-Restarting HA wipes the in-memory cache; the next coordinator update re-fetches it. Calendar event titles render the live name from this in-memory snapshot but never persist it.
+Restarting HA wipes the in-memory cache; the next coordinator update re-fetches it. Calendar event titles render the live name from this in-memory snapshot, plus a persistent on-disk archive of past check-outs (see *Calendar archive* below) -- the archive stores only the four fields the calendar UI shows (summary, start, end, location), never DOB, document, address, citizenship, telephone, e-mail.
 
 The persisted seed is **auto-refreshed after every successful check-in** so the mapping survives eVisitor archiving older prijave (seed = whichever past-stay ID the integration most recently created for that person). The integration's update listener recognises a seed-only delta and skips the entry reload — adding or removing a person mapping still reloads (entities need (de)registration).
 
@@ -277,7 +277,26 @@ Each service fires a corresponding `evisitor_*_succeeded` / `evisitor_*_failed` 
 
 - `binary_sensor.<person>_checked_in` (one per mapped person) — true while there's an active prijava for them.
 - `sensor.<facility>_active_guests` — count of currently checked-in guests at the configured facility.
-- `calendar.<facility>_guests` — events derived from the in-memory active-prijave snapshot. Names appear in the HA UI but never hit `.storage`.
+- `calendar.<facility>_guests` — events derived from a union of (a) the in-memory active+historical-prijave snapshot returned by the API and (b) a persistent on-disk archive of past check-outs. Only the four calendar-event fields (summary, start, end, location) hit `.storage`.
+
+### Calendar archive
+
+The integration keeps a small local archive of every checked-out prijava it has ever seen at `<config>/.storage/evisitor_archive_<entry_id>`. The archive:
+
+- is **populated implicitly** on the first poll after installing / upgrading -- every stay currently flagged ``CheckedOutTourist=True`` in eVisitor lands on disk in one batch (so existing history is preserved without a manual step);
+- grows by **one entry per check-out** on subsequent polls (and is also kept in sync inside the same poll that ``evisitor.check_out_person`` triggers via the coordinator's post-call refresh -- the user never sees an archive lag);
+- **drops entries** for any uid that turns up in ``TouristCancelledBrowse`` (so the rare case of a checked-out prijava being cancelled afterwards doesn't leave a void event behind);
+- stores **only the four calendar-event fields** (summary, start, end, location). DOB, document number, address, citizenship, telephone, e-mail are *never* written to disk;
+- survives Home Assistant restarts and config-entry reloads -- so the calendar can show last month's guests even if eVisitor stops returning them server-side.
+
+Two integration-wide services manage the archive:
+
+| Service | What it does |
+|---------|--------------|
+| `evisitor.purge_calendar_archive` | Wipe every persisted event. The live tier is untouched; the next coordinator poll re-archives any checked-out stays still returned by eVisitor. Useful as an escape hatch. |
+| `evisitor.rebuild_calendar_archive` | Purge + immediately refresh. The fresh snapshot's checked-out stays repopulate the archive in one step. Useful after restoring a backup. |
+
+Both accept an optional ``config_entry_id`` to scope the action to a single entry; omit it to operate on every loaded entry.
 
 ### The integration never writes to eVisitor on its own
 
