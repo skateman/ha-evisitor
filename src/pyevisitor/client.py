@@ -209,12 +209,20 @@ class EVisitorClient:
         filters: Iterable[Filter | dict[str, Any]] | None = None,
         json_body: Any = None,
         require_auth: bool = True,
+        _retry_on_auth_expiry: bool = True,
     ) -> Any:
         """Issue a request and decode the JSON body, raising on errors.
 
         Resolves ``path`` against :attr:`EVisitorConfig.rest_root`.
         ``filters`` is JSON-encoded into the ``filters`` query parameter
         per the Rhetos browse convention.
+
+        If the server reports the session has expired -- typically a
+        validation body containing ``"User is not authenticated."`` or
+        an HTTP 401 -- the client transparently re-logs in and retries
+        the request once. The retry is suppressed via
+        ``_retry_on_auth_expiry=False`` to avoid an infinite loop if the
+        credentials themselves stop working.
         """
         if require_auth and not self._authenticated:
             await self.login()
@@ -228,14 +236,37 @@ class EVisitorClient:
         if encoded_filters is not None:
             query["filters"] = encoded_filters
 
-        async with self.session.request(
-            method,
-            url,
-            params=query or None,
-            json=json_body,
-        ) as resp:
-            text = await resp.text()
-            return self._decode_response(resp.status, str(resp.url), text)
+        try:
+            async with self.session.request(
+                method,
+                url,
+                params=query or None,
+                json=json_body,
+            ) as resp:
+                text = await resp.text()
+                return self._decode_response(resp.status, str(resp.url), text)
+        except (EVisitorValidationError, EVisitorHTTPError) as err:
+            if (
+                require_auth
+                and _retry_on_auth_expiry
+                and _is_auth_expired_error(err)
+            ):
+                _LOGGER.info(
+                    "eVisitor session expired (%s); re-authenticating and retrying",
+                    err,
+                )
+                self._authenticated = False
+                await self.login()
+                return await self.request(
+                    method,
+                    path,
+                    params=params,
+                    filters=filters,
+                    json_body=json_body,
+                    require_auth=require_auth,
+                    _retry_on_auth_expiry=False,
+                )
+            raise
 
     async def get(
         self,
@@ -295,3 +326,34 @@ __all__ = [
     "EVisitorHTTPError",
     "EVisitorValidationError",
 ]
+
+
+# Substrings (case-insensitive) returned by eVisitor's server when the
+# AspNetFormsAuth session cookie has expired. Observed in production:
+# "User is not authenticated." but the server has several phrasings
+# depending on the resource, so we match a loose set.
+_AUTH_EXPIRED_MARKERS = (
+    "not authenticated",
+    "not logged in",
+    "session has expired",
+    "session expired",
+)
+
+
+def _is_auth_expired_error(err: EVisitorError) -> bool:
+    """True if the error looks like an expired AspNetFormsAuth session.
+
+    Covers two shapes:
+    - :class:`EVisitorValidationError` carrying a ``UserMessage`` /
+      ``SystemMessage`` body indicating the user is not authenticated
+      (eVisitor's IIS often returns these on 200/400).
+    - :class:`EVisitorHTTPError` with HTTP 401.
+    """
+    if isinstance(err, EVisitorHTTPError) and err.status == 401:
+        return True
+    if isinstance(err, EVisitorValidationError):
+        text = " ".join(
+            (err.user_message or "", err.system_message or "")
+        ).lower()
+        return any(marker in text for marker in _AUTH_EXPIRED_MARKERS)
+    return False
