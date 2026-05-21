@@ -1,16 +1,27 @@
 blueprint:
-  name: eVisitor – check out after grace period
+  name: eVisitor – check out (daily sweep + long absence)
   description: >-
-    When the mapped HA person has been "not home" for the configured
-    grace period, check them out of eVisitor. Three modes select how
-    much user interaction the check-out needs:
+    Check the mapped HA persons out of eVisitor based on presence. Two
+    triggers feed the same per-person flow:
+
+    * **Daily sweep** at a configurable time of day. Every configured
+      person who is currently away (state not `home`, `unknown`, or
+      `unavailable`) AND has been away for at least the grace period is
+      considered for check-out.
+
+    * **Long absence** anytime: as soon as a person has been away
+      continuously for the long-absence threshold, they are considered
+      for check-out immediately. Acts as a safety net for guests who
+      leave permanently mid-day.
+
+    Three modes select how much user interaction the check-out needs:
 
     * **silent** — register the check-out immediately, no notification.
     * **notify** — register the check-out immediately AND send a
       passive notification telling you it happened.
     * **confirm** — send an actionable notification first; register
       only if the user taps "Check out" (rather than "Keep checked
-      in"). On timeout the automation does nothing.
+      in"). On timeout the check-out is skipped for that person.
 
     For `notify` and `confirm`, pick the notification platform via the
     `platform` input:
@@ -20,16 +31,26 @@ blueprint:
     * Telegram — message via `telegram_bot.send_message` with an
       inline keyboard; buttons render inside the Telegram chat.
 
-    Optional time-of-day window guards against nighttime presence
-    blips triggering a real check-out (in any mode).
+    Caveats:
+
+    * The long-absence trigger uses HA's `state` trigger with a `for:`
+      duration; if a person hops between named zones (e.g. `home` →
+      `work` → `airport`) the duration timer resets at each zone
+      change. The daily sweep is the correctness net — it walks
+      everyone unconditionally.
+
+    * In `confirm` mode the sweep prompts each person sequentially, so
+      a long `notification_timeout_minutes` will delay subsequent
+      persons by that amount. Keep the timeout short (≤ 30 min is a
+      good default) and rely on the long-absence trigger to retry.
   domain: automation
   source_url: https://raw.githubusercontent.com/skateman/ha-evisitor/main/custom_components/evisitor/blueprints/automation/evisitor/auto_check_out.yaml
   input:
     person:
       name: Person(s)
       description: >-
-        One or more HA person entities. Check-out fires per person
-        when *that* person has been "not home" for the grace period.
+        One or more HA person entities. Each is processed independently
+        on both the daily sweep and the long-absence trigger.
       selector:
         entity:
           domain: person
@@ -54,11 +75,13 @@ blueprint:
               value: confirm
 
     grace_minutes:
-      name: Away grace period (minutes)
+      name: Sweep grace period (minutes)
       description: >-
-        Person must remain away for this long before the automation
-        fires. Guards against brief presence flapping.
-      default: 60
+        At the daily sweep, only persons who have been away for at
+        least this long are considered for check-out. Also used to
+        gate the long-absence trigger when its threshold happens to
+        be set lower than this value.
+      default: 120
       selector:
         number:
           min: 5
@@ -67,29 +90,30 @@ blueprint:
           unit_of_measurement: min
           mode: box
 
-    only_during_window:
-      name: Only fire within a time-of-day window
+    sweep_time:
+      name: Daily sweep time
       description: >-
-        When enabled, only run the automation if the trigger time
-        falls between "Window start" and "Window end". Useful to
-        avoid nighttime presence blips triggering a real check-out.
-      default: false
+        Time of day the sweep runs. Fires exactly once per day at this
+        local wall-clock time.
+      default: "20:00:00"
       selector:
-        boolean:
+        time:
 
-    window_start:
-      name: Window start (HH:MM)
-      description: Earliest local time the automation may fire.
-      default: "08:00"
+    long_absence_hours:
+      name: Long-absence threshold (hours)
+      description: >-
+        Outside the daily sweep, a person who has been continuously
+        away for at least this many hours is considered for check-out
+        immediately. Note: state changes between named zones reset
+        this timer; the daily sweep is the correctness net.
+      default: 6
       selector:
-        text:
-
-    window_end:
-      name: Window end (HH:MM)
-      description: Latest local time the automation may fire.
-      default: "23:00"
-      selector:
-        text:
+        number:
+          min: 1
+          max: 24
+          step: 1
+          unit_of_measurement: h
+          mode: box
 
     platform:
       name: Notification platform
@@ -160,9 +184,10 @@ blueprint:
     notification_timeout_minutes:
       name: Confirm timeout (minutes)
       description: >-
-        How long to wait for the user's tap before giving up. Only
-        used in `confirm` mode.
-      default: 60
+        How long to wait for the user's tap before skipping the
+        check-out for that person. Only used in `confirm` mode. Keep
+        short (≤ 30 min) so the sweep does not stall on later persons.
+      default: 30
       selector:
         number:
           min: 1
@@ -175,9 +200,7 @@ variables:
   mode: !input mode
   platform: !input platform
   telegram_chat_id: !input telegram_chat_id
-  only_during_window: !input only_during_window
-  window_start: !input window_start
-  window_end: !input window_end
+  grace_minutes: !input grace_minutes
   notification_title: !input notification_title
   notification_message: !input notification_message
   check_out_action_label: !input check_out_action_label
@@ -189,160 +212,205 @@ variables:
   # would otherwise trip Home Assistant's static service-name
   # validator before the dead companion branch is ever reached.
   notify_service_name: !input notify_service
-  # Slash-prefixed so the same string works as a Telegram callback_data
-  # (which conventionally looks like a /command) and as a Companion
-  # action ID (which accepts any string).
-  action_check_out: "/evisitor_check_out_{{ trigger.entity_id }}"
-  action_keep_in: "/evisitor_keep_in_{{ trigger.entity_id }}"
-  person_name: "{{ state_attr(trigger.entity_id, 'friendly_name') or trigger.entity_id }}"
-  rendered_message: "{{ notification_message.replace('{name}', person_name) }}"
+  # Persons configured on the blueprint, materialised once so the
+  # sweep-path template can iterate without re-reading the input.
+  configured_persons: !input person
 
 trigger:
+  - platform: time
+    id: sweep
+    at: !input sweep_time
   - platform: state
+    id: long_absence
     entity_id: !input person
     from: "home"
     for:
-      minutes: !input grace_minutes
-
-condition:
-  - condition: template
-    value_template: >-
-      {%- if not only_during_window -%}
-      true
-      {%- else -%}
-      {%- set s = window_start.split(':') | map('int') | list -%}
-      {%- set e = window_end.split(':') | map('int') | list -%}
-      {%- set start = s[0] * 60 + s[1] -%}
-      {%- set end = e[0] * 60 + e[1] -%}
-      {%- set cur = now().hour * 60 + now().minute -%}
-      {{ start <= cur <= end }}
-      {%- endif -%}
+      hours: !input long_absence_hours
 
 action:
   # ============================================================
-  # 1. Confirm mode: send actionable, wait, branch, halt on keep-in
+  # 0. Build per-run scratch variables.
   # ============================================================
-  - choose:
-      - conditions:
-          - "{{ mode == 'confirm' }}"
-        sequence:
-          # 1a. Send the actionable notification on the chosen platform.
-          - choose:
-              - conditions:
-                  - "{{ platform == 'companion' }}"
-                sequence:
-                  - service: "{{ notify_service_name }}"
-                    data:
-                      title: "{{ notification_title }}"
-                      message: "{{ rendered_message }}"
-                      data:
-                        actions:
-                          - action: "{{ action_check_out }}"
-                            title: "{{ check_out_action_label }}"
-                          - action: "{{ action_keep_in }}"
-                            title: "{{ keep_in_action_label }}"
-
-              - conditions:
-                  - "{{ platform == 'telegram' }}"
-                sequence:
-                  - service: telegram_bot.send_message
-                    data:
-                      target: "{{ telegram_chat_id | int(0) }}"
-                      # Telegram has no separate title field; render
-                      # the title as bold text at the top of the body.
-                      message: "*{{ notification_title }}*\n{{ rendered_message }}"
-                      parse_mode: markdown
-                      inline_keyboard:
-                        - "{{ check_out_action_label }}:{{ action_check_out }}, {{ keep_in_action_label }}:{{ action_keep_in }}"
-
-          # 1b. Wait for the user's response.
-          # Listens for both event shapes; only the one matching the
-          # chosen platform will ever actually fire.
-          - wait_for_trigger:
-              - platform: event
-                event_type: mobile_app_notification_action
-                event_data:
-                  action: "{{ action_check_out }}"
-              - platform: event
-                event_type: mobile_app_notification_action
-                event_data:
-                  action: "{{ action_keep_in }}"
-              - platform: event
-                event_type: telegram_callback
-                event_data:
-                  data: "{{ action_check_out }}"
-              - platform: event
-                event_type: telegram_callback
-                event_data:
-                  data: "{{ action_keep_in }}"
-            timeout:
-              minutes: "{{ notification_timeout_minutes | int }}"
-            continue_on_timeout: false
-
-          # 1c. Telegram only: ack the callback so the user gets a
-          # toast and the spinner stops on the button.
-          - choose:
-              - conditions:
-                  - "{{ wait.trigger.event.event_type == 'telegram_callback' }}"
-                sequence:
-                  - service: telegram_bot.answer_callback_query
-                    data:
-                      callback_query_id: "{{ wait.trigger.event.data.id }}"
-                      message: >-
-                        {%- if wait.trigger.event.data.data == action_check_out -%}
-                        {{ check_out_action_label }} ✓
-                        {%- else -%}
-                        {{ keep_in_action_label }} ✓
-                        {%- endif -%}
-
-          # 1d. Halt the automation if the user didn't pick "Check out".
-          # Companion fires with `event.data.action`; Telegram with
-          # `event.data.data`. Check both, using `| default('')` so
-          # a missing field doesn't error.
-          - choose:
-              - conditions:
-                  - >-
-                    {{ (wait.trigger.event.data.action | default('')) != action_check_out
-                       and (wait.trigger.event.data.data | default('')) != action_check_out }}
-                sequence:
-                  - stop: "User chose to keep them checked in; no check-out registered."
+  #
+  # - `run_id` makes per-iteration notification action IDs unique to
+  #   this run, so a parallel run (e.g. sweep and long_absence
+  #   overlapping for the same person) cannot share button IDs and
+  #   double-fire the check-out service.
+  # - `grace_seconds` is the unified away-duration filter applied
+  #   inside the per-person loop, so the long-absence path also
+  #   respects `grace_minutes` if the user happens to configure
+  #   `long_absence_hours` lower than `grace_minutes / 60`.
+  # - `targets` is the list of persons this run should consider.
+  #   Sweep: every configured person (filter applied per iteration).
+  #   Long absence: just the entity that fired the state trigger.
+  - variables:
+      run_id: "{{ context.id[-8:] }}"
+      grace_seconds: "{{ (grace_minutes | int) * 60 }}"
+      targets: >-
+        {%- if trigger.id == 'long_absence' -%}
+        {{ [trigger.entity_id] }}
+        {%- else -%}
+        {{ configured_persons }}
+        {%- endif -%}
 
   # ============================================================
-  # 2. Check out (reached unless mode=confirm and user kept-in).
+  # 1. Walk the targets serially.
   # ============================================================
-  - service: evisitor.check_out_person
-    data:
-      person: "{{ trigger.entity_id }}"
-      # Actual moment the person left home, not the moment the
-      # grace period finished or the user tapped a button.
-      check_out_at: "{{ trigger.from_state.last_changed.isoformat() }}"
+  - repeat:
+      for_each: "{{ targets }}"
+      sequence:
+        # 1a. Iteration-local vars derived from `repeat.item` (NOT
+        # `trigger.entity_id` — that is undefined on the sweep path).
+        - variables:
+            target_person: "{{ repeat.item }}"
+            target_state: "{{ states(target_person) }}"
+            target_last_changed: "{{ states[target_person].last_changed }}"
+            target_away_seconds: "{{ (now() - target_last_changed).total_seconds() | int }}"
+            # Slash-prefixed so the same string works as a Telegram
+            # callback_data (which conventionally looks like a
+            # /command) and as a Companion action ID. `run_id` +
+            # `repeat.index` keep IDs unique across parallel runs.
+            action_check_out: "/evisitor_check_out_{{ run_id }}_{{ repeat.index }}"
+            action_keep_in: "/evisitor_keep_in_{{ run_id }}_{{ repeat.index }}"
+            person_name: "{{ state_attr(target_person, 'friendly_name') or target_person }}"
+            rendered_message: "{{ notification_message.replace('{name}', person_name) }}"
 
-  # ============================================================
-  # 3. Notify mode: passive informational notification after check-out.
-  # ============================================================
-  - choose:
-      - conditions:
-          - "{{ mode == 'notify' }}"
-        sequence:
-          - choose:
-              - conditions:
-                  - "{{ platform == 'companion' }}"
-                sequence:
-                  - service: "{{ notify_service_name }}"
-                    data:
-                      title: "{{ notification_title }}"
-                      message: "{{ rendered_message }}"
-                      # No `data.actions` -- passive notification only.
+        # 1b. Per-person eligibility gate. `choose:` without a `default`
+        # skips the iteration silently when the person is home / has
+        # not been away long enough — crucial that we do NOT use
+        # `stop:` or a bare `condition:` here, both of which would
+        # abort the whole repeat run and skip later persons.
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: >-
+                    {{ target_state not in ['home', 'unknown', 'unavailable']
+                       and target_away_seconds >= (grace_seconds | int) }}
+              sequence:
+                # 1c. Confirm mode: send actionable, wait, branch.
+                - choose:
+                    - conditions:
+                        - "{{ mode == 'confirm' }}"
+                      sequence:
+                        - choose:
+                            - conditions:
+                                - "{{ platform == 'companion' }}"
+                              sequence:
+                                - service: "{{ notify_service_name }}"
+                                  data:
+                                    title: "{{ notification_title }}"
+                                    message: "{{ rendered_message }}"
+                                    data:
+                                      actions:
+                                        - action: "{{ action_check_out }}"
+                                          title: "{{ check_out_action_label }}"
+                                        - action: "{{ action_keep_in }}"
+                                          title: "{{ keep_in_action_label }}"
 
-              - conditions:
-                  - "{{ platform == 'telegram' }}"
-                sequence:
-                  - service: telegram_bot.send_message
-                    data:
-                      target: "{{ telegram_chat_id | int(0) }}"
-                      message: "*{{ notification_title }}*\n{{ rendered_message }}"
-                      parse_mode: markdown
-                      # No `inline_keyboard` -- passive notification only.
+                            - conditions:
+                                - "{{ platform == 'telegram' }}"
+                              sequence:
+                                - service: telegram_bot.send_message
+                                  data:
+                                    target: "{{ telegram_chat_id | int(0) }}"
+                                    # Telegram has no separate title field;
+                                    # render the title as bold markdown.
+                                    message: "*{{ notification_title }}*\n{{ rendered_message }}"
+                                    parse_mode: markdown
+                                    inline_keyboard:
+                                      - "{{ check_out_action_label }}:{{ action_check_out }}, {{ keep_in_action_label }}:{{ action_keep_in }}"
+
+                        # 1d. Wait for the user's response. Listens for
+                        # both Companion and Telegram event shapes; only
+                        # the one matching the chosen platform fires.
+                        - wait_for_trigger:
+                            - platform: event
+                              event_type: mobile_app_notification_action
+                              event_data:
+                                action: "{{ action_check_out }}"
+                            - platform: event
+                              event_type: mobile_app_notification_action
+                              event_data:
+                                action: "{{ action_keep_in }}"
+                            - platform: event
+                              event_type: telegram_callback
+                              event_data:
+                                data: "{{ action_check_out }}"
+                            - platform: event
+                              event_type: telegram_callback
+                              event_data:
+                                data: "{{ action_keep_in }}"
+                          timeout:
+                            minutes: "{{ notification_timeout_minutes | int }}"
+                          # Must be true: false would abort the whole
+                          # repeat run on the first timed-out prompt
+                          # and skip later persons.
+                          continue_on_timeout: true
+
+                        # 1e. Telegram only: ack the callback so the
+                        # user gets a toast and the spinner stops.
+                        - choose:
+                            - conditions:
+                                - "{{ wait.trigger is not none }}"
+                                - "{{ wait.trigger.event.event_type == 'telegram_callback' }}"
+                              sequence:
+                                - service: telegram_bot.answer_callback_query
+                                  data:
+                                    callback_query_id: "{{ wait.trigger.event.data.id }}"
+                                    message: >-
+                                      {%- if wait.trigger.event.data.data == action_check_out -%}
+                                      {{ check_out_action_label }} ✓
+                                      {%- else -%}
+                                      {{ keep_in_action_label }} ✓
+                                      {%- endif -%}
+
+                # 1f. Decide whether to actually check this person out.
+                # In confirm mode: only if the user tapped Check out
+                # (not Keep them, not timeout). In silent / notify
+                # modes: always.
+                - choose:
+                    - conditions:
+                        - >-
+                          {{ mode != 'confirm'
+                             or (wait.trigger is not none
+                                 and ((wait.trigger.event.data.action | default('')) == action_check_out
+                                      or (wait.trigger.event.data.data | default('')) == action_check_out)) }}
+                      sequence:
+                        - service: evisitor.check_out_person
+                          data:
+                            person: "{{ target_person }}"
+                            # Moment the person last transitioned into
+                            # their current state. For a person who
+                            # left home and stayed in one zone, this
+                            # is when they left home. For zone-hoppers
+                            # it is the latest zone-arrival timestamp.
+                            check_out_at: "{{ target_last_changed.isoformat() }}"
+
+                        # 1g. Notify mode: passive informational
+                        # notification after the check-out.
+                        - choose:
+                            - conditions:
+                                - "{{ mode == 'notify' }}"
+                              sequence:
+                                - choose:
+                                    - conditions:
+                                        - "{{ platform == 'companion' }}"
+                                      sequence:
+                                        - service: "{{ notify_service_name }}"
+                                          data:
+                                            title: "{{ notification_title }}"
+                                            message: "{{ rendered_message }}"
+                                            # No `data.actions` -- passive only.
+
+                                    - conditions:
+                                        - "{{ platform == 'telegram' }}"
+                                      sequence:
+                                        - service: telegram_bot.send_message
+                                          data:
+                                            target: "{{ telegram_chat_id | int(0) }}"
+                                            message: "*{{ notification_title }}*\n{{ rendered_message }}"
+                                            parse_mode: markdown
+                                            # No `inline_keyboard` -- passive only.
 
 mode: parallel
 max: 10
