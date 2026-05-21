@@ -266,8 +266,8 @@ A menu under "Configure":
 
 | Service | What it does |
 |---------|--------------|
-| `evisitor.check_in_person` | New `CheckInTourist` for the mapped person, prefilled from `Guest.latest`. Auto-allocates a `uuid4` for the prijava ID. |
-| `evisitor.check_out_person` | `CheckOutTourist` against the active prijava resolved from coordinator state. |
+| `evisitor.check_in_person` | New `CheckInTourist` for the mapped person, prefilled from `Guest.latest`. Auto-allocates a `uuid4` for the prijava ID. The arrival timestamp is **floored to the start of its hour** (e.g. 14:37 → 14:00) so registered `StayFrom` / `TimeStayFrom` never look like oddly specific minute-precise values. |
+| `evisitor.check_out_person` | `CheckOutTourist` against the active prijava resolved from coordinator state. The departure timestamp is **ceiled to the start of the next hour** (e.g. 11:23 → 12:00; 23:30 → 00:00 next day; exact-hour values are left untouched). Combined with the arrival floor, the registered stay duration is always ≥ the actual stay -- conservative for tourist-board reporting. |
 | `evisitor.cancel_check_in` | `CancelTouristCheckIn` (poništavanje). |
 | `evisitor.extend_stay` | Re-`CheckInTourist` with same ID and a new `ForeseenStayUntil` (the "edit" path). Accepts either `foreseen_stay_until` (datetime) or `stay_days` (int — today + N days at the integration's default check-out time). |
 

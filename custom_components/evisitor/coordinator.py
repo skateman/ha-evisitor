@@ -53,6 +53,33 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _floor_to_hour(value: datetime) -> datetime:
+    """Round a datetime down to the start of its hour.
+
+    Used on check-in arrivals so the registered `StayFrom` always
+    sits on a whole-hour boundary (e.g. arrival 14:37 becomes 14:00).
+    The rounding direction is deliberately conservative for
+    tourist-board reporting: an earlier arrival yields a longer
+    recorded stay than reality, never shorter.
+    """
+    return value.replace(minute=0, second=0, microsecond=0)
+
+
+def _ceil_to_hour(value: datetime) -> datetime:
+    """Round a datetime up to the start of the next hour.
+
+    Used on check-out moments so the registered departure always
+    sits on a whole-hour boundary (e.g. departure 11:23 becomes
+    12:00). A value already on a whole-hour boundary is returned
+    unchanged. Like ``_floor_to_hour`` for arrivals, this errs on
+    the side of a longer recorded stay than reality.
+    """
+    floored = _floor_to_hour(value)
+    if floored == value:
+        return floored
+    return floored + timedelta(hours=1)
+
+
 class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Owns the eVisitor client + caches relevant snapshots in memory."""
 
@@ -416,7 +443,13 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # server allows StayFrom up to ~14 days in the past (the per-account
         # `AllowedNumberOfDaysToCheckInCheckOut` parameter) -- well outside
         # any realistic debounce window.
-        arrival = (stay_from or dt_util.now()).replace(microsecond=0)
+        #
+        # Floor to the whole hour so the registered StayFrom never reads
+        # as an oddly specific HH:MM. The rounding is conservative: an
+        # arrival rounded down (earlier) yields a recorded stay that is
+        # always >= the actual stay, which is the right direction for
+        # the tourist board.
+        arrival = _floor_to_hour(stay_from or dt_util.now())
         window = (
             StayWindow(
                 stay_from=arrival,
@@ -456,7 +489,12 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active = self.find_active_stay_for_person(person_entity_id)
         if active is None:
             raise EVisitorError(f"No active prijava for {person_entity_id!r}")
-        moment = check_out_at or dt_util.now()
+        # Ceiling to the whole hour pairs with the arrival floor above:
+        # a departure rounded up (later) yields a recorded stay that is
+        # always >= the actual stay, and the registered CheckOutDate /
+        # TimeCheckedOut pair never reads as an oddly specific HH:MM.
+        # A value already on a whole-hour boundary is left untouched.
+        moment = _ceil_to_hour(check_out_at or dt_util.now())
         request = CheckOutRequest(
             id=str(active["ID"]),
             check_out_date=moment.date(),

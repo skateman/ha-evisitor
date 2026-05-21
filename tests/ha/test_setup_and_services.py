@@ -24,6 +24,7 @@ from custom_components.evisitor.const import (
     EVENT_CHECK_IN_SUCCEEDED,
     KEY_CHECK_IN_ID_SEED,
     SERVICE_CHECK_IN_PERSON,
+    SERVICE_CHECK_OUT_PERSON,
 )
 
 
@@ -498,7 +499,8 @@ async def test_check_in_with_stay_from_backdates_the_payload(
 ) -> None:
     """``check_in_person(person, stay_from=<datetime>)`` puts that
     datetime into the CheckInTourist payload's StayFrom + TimeStayFrom,
-    rather than 'now'.
+    rather than 'now'. The hour is floored to the start of the hour to
+    avoid oddly specific HH:MM values landing at the tourist board.
 
     This is the path the auto-check-in blueprint takes when it passes
     ``trigger.to_state.last_changed`` -- the moment the person actually
@@ -522,10 +524,194 @@ async def test_check_in_with_stay_from_backdates_the_payload(
 
     submitted = client.actions.check_in_tourist.await_args.args[0]
     payload = submitted.to_payload()
-    # StayFrom is YYYYMMDD; TimeStayFrom is HH:MM. Both reflect the
-    # backdated arrival, not now().
+    # StayFrom is YYYYMMDD; TimeStayFrom is HH:MM. The arrival is
+    # floored to the start of the hour (18:42 -> 18:00). The date
+    # never changes because flooring within a day cannot cross
+    # midnight.
     assert payload["StayFrom"] == arrival.strftime("%Y%m%d")
-    assert payload["TimeStayFrom"] == arrival.strftime("%H:%M")
+    assert payload["TimeStayFrom"] == "18:00"
+
+
+async def test_check_in_at_whole_hour_is_not_shifted(
+    hass: HomeAssistant, setup_integration
+) -> None:
+    """An arrival already on a whole-hour boundary is left untouched
+    (no spurious off-by-one-hour drift)."""
+    from datetime import datetime, timedelta
+
+    _entry, client = setup_integration
+
+    arrival = (datetime.now() - timedelta(hours=37)).replace(
+        hour=15, minute=0, second=0, microsecond=0
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CHECK_IN_PERSON,
+        {"person": PERSON_ENTITY, "stay_from": arrival.isoformat()},
+        blocking=True,
+    )
+
+    payload = client.actions.check_in_tourist.await_args.args[0].to_payload()
+    assert payload["StayFrom"] == arrival.strftime("%Y%m%d")
+    assert payload["TimeStayFrom"] == "15:00"
+
+
+# --------------------------------------------------------------------------
+# Check-out timestamp rounding
+# --------------------------------------------------------------------------
+
+
+async def _setup_with_active_stay(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+):
+    """Boot the integration with Novák Marek flipped to a currently-active
+    stay, so check_out_person can resolve a prijava to close."""
+    import copy
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    guests = copy.deepcopy(fake_unique_guests)
+    guests[0].latest["CheckedOutTourist"] = False
+    now = dt_util.now()
+    yesterday_ts = int((now - timedelta(days=1)).timestamp() * 1000)
+    guests[0].latest["StayFrom"] = f"/Date({yesterday_ts}+0100)/"
+    guests[0].latest["DateTimeOfArrival"] = f"/Date({yesterday_ts}+0100)/"
+    guests[0].latest["ForeseenStayUntil"] = f"/Date({yesterday_ts + 86400000}+0100)/"
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ENVIRONMENT: "production",
+            CONF_USERNAME: "u",
+            CONF_PASSWORD: "p",
+            CONF_API_KEY: "",
+            CONF_FACILITY_CODE: "0000001",
+        },
+        options={CONF_PERSON_MAP: {PERSON_ENTITY: PERSON_OPTIONS}},
+    )
+    entry.add_to_hass(hass)
+
+    client = fake_client_factory()
+    client.guests.unique.return_value = guests
+    client.guests.stays.return_value = [g.latest for g in guests]
+    client.browses.list_tourists.return_value = [g.latest for g in guests]
+    return entry, client
+
+
+async def test_check_out_at_mid_hour_is_ceiled_up(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """A departure at 11:23 lands on the eVisitor payload as 12:00 on the
+    same date. The rounding direction over-reports the stay (later
+    departure) which is the safe direction for tourist-board reporting."""
+    from datetime import datetime, timedelta
+
+    entry, client = await _setup_with_active_stay(
+        hass, fake_unique_guests, fake_client_factory
+    )
+
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        departure = (datetime.now() - timedelta(hours=2)).replace(
+            hour=11, minute=23, second=17, microsecond=500
+        )
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CHECK_OUT_PERSON,
+            {"person": PERSON_ENTITY, "check_out_at": departure.isoformat()},
+            blocking=True,
+        )
+
+        submitted = client.actions.check_out_tourist.await_args.args[0]
+        payload = submitted.to_payload()
+        assert payload["CheckOutDate"] == departure.strftime("%Y%m%d")
+        assert payload["CheckOutTime"] == "12:00"
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+
+async def test_check_out_at_exact_hour_is_not_shifted(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """A departure already on a whole-hour boundary is left untouched, so
+    a 14:00 leave is recorded as 14:00 (not bumped to 15:00)."""
+    from datetime import datetime, timedelta
+
+    entry, client = await _setup_with_active_stay(
+        hass, fake_unique_guests, fake_client_factory
+    )
+
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        departure = (datetime.now() - timedelta(hours=2)).replace(
+            hour=14, minute=0, second=0, microsecond=0
+        )
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CHECK_OUT_PERSON,
+            {"person": PERSON_ENTITY, "check_out_at": departure.isoformat()},
+            blocking=True,
+        )
+
+        payload = client.actions.check_out_tourist.await_args.args[0].to_payload()
+        assert payload["CheckOutDate"] == departure.strftime("%Y%m%d")
+        assert payload["CheckOutTime"] == "14:00"
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+
+async def test_check_out_pre_midnight_ceils_to_next_day(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """A 23:30 departure ceils to 00:00 on the following date. The
+    multi-day stay shape is what eVisitor expects; only the recorded
+    leave moment shifts."""
+    from datetime import datetime, timedelta
+
+    entry, client = await _setup_with_active_stay(
+        hass, fake_unique_guests, fake_client_factory
+    )
+
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # Build a departure at 23:30 on a fully-bounded day (no need to
+        # tie it to "now"; the coordinator does not validate the date
+        # against wall-clock time on the check-out path).
+        departure = datetime(2026, 5, 21, 23, 30, 17, 500)
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CHECK_OUT_PERSON,
+            {"person": PERSON_ENTITY, "check_out_at": departure.isoformat()},
+            blocking=True,
+        )
+
+        payload = client.actions.check_out_tourist.await_args.args[0].to_payload()
+        next_day = departure + timedelta(days=1)
+        next_day_midnight = next_day.replace(hour=0, minute=0, second=0, microsecond=0)
+        assert payload["CheckOutDate"] == next_day_midnight.strftime("%Y%m%d")
+        assert payload["CheckOutTime"] == "00:00"
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
 
 
 async def test_calendar_shows_checked_out_stays_as_historical_events(
