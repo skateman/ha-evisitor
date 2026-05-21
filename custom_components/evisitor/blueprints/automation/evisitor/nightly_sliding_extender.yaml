@@ -1,5 +1,5 @@
 blueprint:
-  name: eVisitor – nightly sliding stay extender
+  name: eVisitor – extend stay
   description: >-
     Once per day at the configured time, push each mapped HA person's
     active prijava forward so ForeseenStayUntil never sits in the past.

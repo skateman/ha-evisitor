@@ -1,5 +1,5 @@
 blueprint:
-  name: eVisitor – check in on arrival
+  name: eVisitor – check in
   description: >-
     When the mapped HA person becomes "home", check them into eVisitor.
     Three modes select how much user interaction the check-in needs:

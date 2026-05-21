@@ -1,5 +1,5 @@
 blueprint:
-  name: eVisitor – check out (daily sweep + long absence)
+  name: eVisitor – check out
   description: >-
     Check the mapped HA persons out of eVisitor based on presence. Two
     triggers feed the same per-person flow:
