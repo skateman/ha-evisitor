@@ -312,7 +312,10 @@ action:
                               sequence:
                                 - service: telegram_bot.send_message
                                   data:
-                                    target: "{{ telegram_chat_id | int(0) }}"
+                                    # `chat_id` replaces the deprecated
+                                    # `target` parameter (HA removed
+                                    # `target` in 2026.9.0).
+                                    chat_id: "{{ telegram_chat_id | int(0) }}"
                                     # Telegram has no separate title field;
                                     # render the title as bold markdown.
                                     message: "*{{ notification_title }}*\n{{ rendered_message }}"
@@ -407,7 +410,7 @@ action:
                                       sequence:
                                         - service: telegram_bot.send_message
                                           data:
-                                            target: "{{ telegram_chat_id | int(0) }}"
+                                            chat_id: "{{ telegram_chat_id | int(0) }}"
                                             message: "*{{ notification_title }}*\n{{ rendered_message }}"
                                             parse_mode: markdown
                                             # No `inline_keyboard` -- passive only.
