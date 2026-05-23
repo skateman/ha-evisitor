@@ -157,6 +157,30 @@ blueprint:
       selector:
         text:
 
+    check_in_done_message:
+      name: 'Telegram edit text: after check in'
+      description: >-
+        Telegram only, confirm mode. After the user taps the check-in
+        button, the original prompt message is edited in-place to this
+        text (with inline buttons removed). The placeholder ``{name}``
+        is replaced with the person's friendly name. Has no effect on
+        Companion notifications (which cannot be edited in place).
+      default: "{name} checked in ✓"
+      selector:
+        text:
+
+    skip_done_message:
+      name: 'Telegram edit text: after skip'
+      description: >-
+        Telegram only, confirm mode. After the user taps the skip
+        button, the original prompt message is edited in-place to
+        this text (with inline buttons removed). The placeholder
+        ``{name}`` is replaced with the person's friendly name. Has
+        no effect on Companion notifications.
+      default: "{name} not checked in"
+      selector:
+        text:
+
     notification_timeout_minutes:
       name: Confirm timeout (minutes)
       description: >-
@@ -181,6 +205,8 @@ variables:
   notification_message: !input notification_message
   check_in_action_label: !input check_in_action_label
   skip_action_label: !input skip_action_label
+  check_in_done_message: !input check_in_done_message
+  skip_done_message: !input skip_done_message
   notification_timeout_minutes: !input notification_timeout_minutes
   # Resolved here so the companion-only `service:` field below renders
   # via a template (runtime) instead of being substituted literally at
@@ -268,10 +294,15 @@ action:
               minutes: "{{ notification_timeout_minutes | int }}"
             continue_on_timeout: false
 
-          # 1c. Telegram only: ack the callback so the user gets a
-          # toast and the spinner stops on the button.
+          # 1c. Telegram only: ack the callback (small toast popup)
+          # AND edit the original prompt message in place to reflect
+          # the outcome, removing the inline keyboard so the buttons
+          # cannot be tapped again. Companion notifications cannot be
+          # edited in place, so this branch is skipped for them; the
+          # original notification simply ages out.
           - choose:
               - conditions:
+                  - "{{ wait.trigger is not none }}"
                   - "{{ wait.trigger.event.event_type == 'telegram_callback' }}"
                 sequence:
                   - service: telegram_bot.answer_callback_query
@@ -283,6 +314,24 @@ action:
                         {%- else -%}
                         {{ skip_action_label }} ✓
                         {%- endif -%}
+                  - service: telegram_bot.edit_message
+                    data:
+                      # `message_id` + `chat_id` identify the original
+                      # prompt; both are carried by the callback event.
+                      message_id: "{{ wait.trigger.event.data.message.message_id }}"
+                      chat_id: "{{ wait.trigger.event.data.chat_id }}"
+                      parse_mode: markdown
+                      # Empty list strips the original inline keyboard
+                      # so the buttons disappear after the tap.
+                      inline_keyboard: []
+                      message: >-
+                        *{{ notification_title }}*
+
+                        {% if wait.trigger.event.data.data == action_check_in -%}
+                        {{ check_in_done_message.replace('{name}', person_name) }}
+                        {%- else -%}
+                        {{ skip_done_message.replace('{name}', person_name) }}
+                        {%- endif %}
 
           # 1d. Halt the automation if the user didn't pick "Check in".
           # Companion fires with `event.data.action`; Telegram with
