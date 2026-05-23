@@ -136,6 +136,32 @@ def test_split_surname_and_name_empty() -> None:
     assert _split_surname_and_name("") == ("", "")
 
 
+def test_split_surname_and_name_strips_trailing_age_suffix() -> None:
+    """Server returns ``"Surname Given (NN)"``; the ``(NN)`` must not
+    leak into the given-name field, or each re-POST grows another one.
+    """
+    assert _split_surname_and_name("Surname Given (40)") == ("Surname", "Given")
+    assert _split_surname_and_name("Surname Given (12)") == ("Surname", "Given")
+
+
+def test_split_surname_and_name_strips_repeated_corrupted_age_suffix() -> None:
+    """Idempotent against records already corrupted by the old code."""
+    assert _split_surname_and_name("Surname Given (40) (40) (40)") == (
+        "Surname",
+        "Given",
+    )
+
+
+def test_split_surname_and_name_preserves_inner_parens() -> None:
+    """Only the *trailing* (NN) digit-only token is the age suffix; an
+    inner parenthesized middle name like ``"(Middle)"`` must survive
+    unchanged (regression guard for the multi_token test above)."""
+    assert _split_surname_and_name("Surname (Middle) Given (40)") == (
+        "Surname",
+        "(Middle) Given",
+    )
+
+
 # --- _split_document_number ---------------------------------------------------
 
 

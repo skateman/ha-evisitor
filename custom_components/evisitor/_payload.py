@@ -44,6 +44,16 @@ _FALLBACK_COUNTRY = "HRV"
 # eVisitor ``DatePlaceOfBirth`` looks like
 # ``"DD.MM.YYYY (NN) <city or "" > <country>"``.
 _BIRTH_PREFIX_RE = re.compile(r"^\s*\d{2}\.\d{2}\.\d{4}\s*\(\d+\)\s*")
+# eVisitor returns ``SurnameAndName`` with a trailing ``" (NN)"`` age
+# suffix (the same one stripped by ``pyevisitor.guests._strip_age``).
+# We must drop it before splitting; otherwise the trailing ``(NN)``
+# ends up in the given-name field, gets POSTed back as ``TouristName``,
+# and the server re-derives the display name by appending **another**
+# age suffix -- producing ``"Surname Given (NN) (NN)"`` after one
+# round-trip, then ``"... (NN) (NN) (NN)"`` after the next, etc.
+# Matches one-or-more trailing age tokens so the parser is idempotent
+# against records already corrupted by the pre-fix code.
+_AGE_SUFFIX_RE = re.compile(r"(\s*\(\d+\)\s*)+$")
 _GENDER_NORMALIZER = {
     "muški": "muški",
     "muski": "muški",
@@ -279,10 +289,17 @@ def _payment_category_code(
 
 
 def _split_surname_and_name(value: str | None) -> tuple[str, str]:
-    """eVisitor's ``SurnameAndName`` is ``"Surname GivenNames..."``."""
+    """eVisitor's ``SurnameAndName`` is ``"Surname GivenNames..."``.
+
+    The server appends a trailing ``" (NN)"`` age suffix on the way
+    out, which we strip here so it does not contaminate the given
+    name on re-POST (which would otherwise cause the display name to
+    grow another ``(NN)`` per edit -- see ``_AGE_SUFFIX_RE`` above).
+    """
     if not value:
         return ("", "")
-    parts = value.strip().split()
+    stripped = _AGE_SUFFIX_RE.sub("", value).strip()
+    parts = stripped.split()
     if not parts:
         return ("", "")
     if len(parts) == 1:
