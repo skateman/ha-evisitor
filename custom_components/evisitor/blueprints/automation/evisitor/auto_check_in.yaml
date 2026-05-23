@@ -231,6 +231,22 @@ trigger:
 
 action:
   # ============================================================
+  # 0. Skip if the person is already checked in. The integration
+  # creates a `binary_sensor.<slug>_checked_in` per mapped person,
+  # which is `on` while the prijava is active. Build that entity id
+  # from the trigger person and bail out early on `on`. Other states
+  # (off, unknown, unavailable, missing) fall through and let the
+  # check-in proceed -- a missing or renamed entity must not silently
+  # block legitimate check-ins.
+  - variables:
+      checked_in_entity: "binary_sensor.{{ trigger.entity_id.split('.')[-1] }}_checked_in"
+  - choose:
+      - conditions:
+          - "{{ states(checked_in_entity) == 'on' }}"
+        sequence:
+          - stop: "Already checked in; no auto check-in needed."
+
+  # ============================================================
   # 1. Confirm mode: send actionable, wait, branch, halt on skip
   # ============================================================
   - choose:

@@ -293,6 +293,12 @@ action:
             target_state: "{{ states(target_person) }}"
             target_last_changed: "{{ states[target_person].last_changed }}"
             target_away_seconds: "{{ (now() - target_last_changed).total_seconds() | int }}"
+            # Per-person binary_sensor the integration creates; used by
+            # the eligibility gate below to skip persons who are already
+            # not checked in. Other states (off, unknown, unavailable,
+            # missing) treat as "not checked in" -- the gate falls
+            # through and the iteration is skipped silently.
+            checked_in_entity: "binary_sensor.{{ target_person.split('.')[-1] }}_checked_in"
             # Slash-prefixed so the same string works as a Telegram
             # callback_data (which conventionally looks like a
             # /command) and as a Companion action ID. `run_id` +
@@ -304,15 +310,17 @@ action:
 
         # 1b. Per-person eligibility gate. `choose:` without a `default`
         # skips the iteration silently when the person is home / has
-        # not been away long enough — crucial that we do NOT use
-        # `stop:` or a bare `condition:` here, both of which would
-        # abort the whole repeat run and skip later persons.
+        # not been away long enough / is not currently checked in --
+        # crucial that we do NOT use `stop:` or a bare `condition:`
+        # here, both of which would abort the whole repeat run and
+        # skip later persons.
         - choose:
             - conditions:
                 - condition: template
                   value_template: >-
                     {{ target_state not in ['home', 'unknown', 'unavailable']
-                       and target_away_seconds >= (grace_seconds | int) }}
+                       and target_away_seconds >= (grace_seconds | int)
+                       and states(checked_in_entity) == 'on' }}
               sequence:
                 # 1c. Confirm mode: send actionable, wait, branch.
                 - choose:
