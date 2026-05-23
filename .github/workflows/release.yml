@@ -84,13 +84,30 @@ jobs:
         # carries the version (HA reads it as JSON before importing
         # any of the integration's Python). The library's __version__
         # is derived from package metadata at import time, so it doesn't
-        # need a separate check.
+        # need a separate check. The manifest's `requirements` pin for
+        # pyevisitor must also match, otherwise HACS will ship an
+        # integration that pins a non-existent library version.
         run: |
           py=${{ needs.detect.outputs.version }}
           mf=$(python -c 'import json; print(json.load(open("custom_components/evisitor/manifest.json"))["version"])')
-          echo "pyproject=$py manifest=$mf"
+          req=$(python -c '
+          import json, re
+          reqs = json.load(open("custom_components/evisitor/manifest.json"))["requirements"]
+          for r in reqs:
+              m = re.match(r"^pyevisitor==(.+)$", r)
+              if m:
+                  print(m.group(1))
+                  break
+          else:
+              raise SystemExit("manifest.requirements does not pin pyevisitor==<version>")
+          ')
+          echo "pyproject=$py manifest=$mf requirements_pin=$req"
           if [ "$py" != "$mf" ]; then
             echo "::error::version mismatch -- bump pyproject.toml AND custom_components/evisitor/manifest.json to the same value"
+            exit 1
+          fi
+          if [ "$py" != "$req" ]; then
+            echo "::error::manifest.requirements pins pyevisitor==$req but the release version is $py -- update the pin"
             exit 1
           fi
 
