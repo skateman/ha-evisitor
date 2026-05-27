@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -51,6 +52,28 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+EVISITOR_TZ = ZoneInfo("Europe/Zagreb")
+
+
+def _to_zagreb(value: datetime) -> datetime:
+    """Convert a tz-aware datetime to Europe/Zagreb local time.
+
+    The eVisitor server interprets every wall-clock value as Croatia
+    local; HA hands us datetimes anchored to whatever
+    ``hass.config.time_zone`` is (often UTC). Normalising to Zagreb up
+    front means the hour/day arithmetic in ``check_in_person`` /
+    ``extend_stay`` (e.g. "+72h then replace hour=11") computes on the
+    same clock the server will read back. Without this, a 23:30 UTC
+    arrival would be rounded against the UTC wall clock instead of the
+    Zagreb wall clock, drifting the registered StayFrom by 1-2 hours
+    (and occasionally by a full day at the date boundary).
+    """
+    if value.tzinfo is None:
+        # Assume HA-local fallback; should never happen in our code paths.
+        value = value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    return value.astimezone(EVISITOR_TZ)
 
 
 def _floor_to_hour(value: datetime) -> datetime:
@@ -449,7 +472,7 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # arrival rounded down (earlier) yields a recorded stay that is
         # always >= the actual stay, which is the right direction for
         # the tourist board.
-        arrival = _floor_to_hour(stay_from or dt_util.now())
+        arrival = _floor_to_hour(_to_zagreb(stay_from or dt_util.now()))
         window = (
             StayWindow(
                 stay_from=arrival,
@@ -494,11 +517,17 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # always >= the actual stay, and the registered CheckOutDate /
         # TimeCheckedOut pair never reads as an oddly specific HH:MM.
         # A value already on a whole-hour boundary is left untouched.
-        moment = _ceil_to_hour(check_out_at or dt_util.now())
+        moment = _ceil_to_hour(_to_zagreb(check_out_at or dt_util.now()))
+        # Hand the full tz-aware datetime to pyevisitor so the wall-clock
+        # extraction happens in Europe/Zagreb -- the eVisitor server
+        # interprets the YYYYMMDD/HH:MM scalars as Croatia local. Passing
+        # naive ``.date()``/``.time()`` here would lock in whichever
+        # timezone ``moment`` was anchored to (HA gives UTC), shifting
+        # every check-out by 1-2 hours.
         request = CheckOutRequest(
             id=str(active["ID"]),
-            check_out_date=moment.date(),
-            check_out_time=moment.time().replace(microsecond=0),
+            check_out_date=moment,
+            check_out_time=moment.replace(microsecond=0),
         )
         await self.client.actions.check_out_tourist(request)
         await self.async_refresh()
@@ -604,5 +633,6 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 
 def _today_local_midnight() -> datetime:
-    now = dt_util.now()
+    """Midnight today in Europe/Zagreb (the eVisitor server's wall clock)."""
+    now = dt_util.now().astimezone(EVISITOR_TZ)
     return now.replace(hour=0, minute=0, second=0, microsecond=0)

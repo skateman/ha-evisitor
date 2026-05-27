@@ -171,13 +171,18 @@ def build_check_in_request(
         or _DEFAULT_TT_PAYMENT_CATEGORY
     )
 
+    # Pass the full tz-aware datetimes through (CheckInRequest's serialiser
+    # converts to Europe/Zagreb before extracting the wall clock).
+    # Pre-extracting .date()/.time() here would strip tz info and lock in
+    # whichever zone the caller used -- HA gives UTC, which would shift
+    # every recorded arrival by 1-2 hours.
     request = CheckInRequest(
         id=check_in_id or str(uuid.uuid4()),
         facility=facility_code,
-        stay_from=stay_window.stay_from.date(),
-        foreseen_stay_until=stay_window.foreseen_stay_until.date(),
-        time_stay_from=stay_window.stay_from.time().replace(microsecond=0),
-        time_estimated_stay_until=stay_window.foreseen_stay_until.time().replace(
+        stay_from=stay_window.stay_from,
+        foreseen_stay_until=stay_window.foreseen_stay_until,
+        time_stay_from=stay_window.stay_from.replace(microsecond=0),
+        time_estimated_stay_until=stay_window.foreseen_stay_until.replace(
             microsecond=0
         ),
         document_type=document_type,

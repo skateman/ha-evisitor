@@ -13,8 +13,16 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .encoding import Filter, FilterOp
+
+# The eVisitor server unconditionally interprets the scalar YYYYMMDD /
+# HH:MM strings on CheckIn/CheckOut as Croatia local time. Any tz-aware
+# datetime handed to the helpers below is converted to this zone before
+# we strip the wall-clock components -- otherwise UTC-anchored datetimes
+# from Home Assistant get recorded 1-2 hours off.
+EVISITOR_TIMEZONE = ZoneInfo("Europe/Zagreb")
 
 
 def _date_to_yyyymmdd(value: date | datetime | str | None) -> str | None:
@@ -23,6 +31,8 @@ def _date_to_yyyymmdd(value: date | datetime | str | None) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(EVISITOR_TIMEZONE)
         value = value.date()
     return value.strftime("%Y%m%d")
 
@@ -33,7 +43,14 @@ def _time_to_hhmm(value: time | datetime | str | None) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(EVISITOR_TIMEZONE)
         value = value.time()
+    elif isinstance(value, time) and value.tzinfo is not None:
+        # tz-aware naked time: shift into Croatia local on today's date.
+        today = datetime.now(value.tzinfo).date()
+        combined = datetime.combine(today, value).astimezone(EVISITOR_TIMEZONE)
+        value = combined.time()
     return value.strftime("%H:%M")
 
 

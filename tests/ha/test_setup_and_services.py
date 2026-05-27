@@ -463,9 +463,15 @@ async def test_extend_stay_with_stay_days_builds_window(
         payload = submitted.to_payload()
         # Same ID re-used (not a new check-in).
         assert payload["ID"] == "stay-1"
-        # Today + 4 days @ 11:00 local.
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        expected = midnight + timedelta(days=4)
+        # Today + 4 days @ 11:00 Zagreb local. The coordinator anchors
+        # the "today midnight" baseline in Zagreb so the wall clock the
+        # server reads matches the user-configured check-out time.
+        from zoneinfo import ZoneInfo
+
+        zagreb_midnight = now.astimezone(ZoneInfo("Europe/Zagreb")).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        expected = zagreb_midnight + timedelta(days=4)
         assert payload["ForeseenStayUntil"] == expected.strftime("%Y%m%d")
         assert payload["TimeEstimatedStayUntil"] == "11:00"
 
@@ -507,11 +513,15 @@ async def test_check_in_with_stay_from_backdates_the_payload(
     became home, not the moment presence-debounce finished.
     """
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     _entry, client = setup_integration
 
-    # Pick a clearly-backdated arrival: yesterday at 18:42 local-naive.
-    arrival = (datetime.now() - timedelta(hours=37)).replace(
+    # Pick a clearly-backdated arrival: yesterday at 18:42 Zagreb local.
+    # In production the blueprint passes ``trigger.last_changed`` which is
+    # already tz-aware; we mirror that here so the conversion to Zagreb
+    # is a no-op and the registered hour matches the input hour.
+    arrival = (datetime.now(ZoneInfo("Europe/Zagreb")) - timedelta(hours=37)).replace(
         hour=18, minute=42, second=0, microsecond=0
     )
 
@@ -538,10 +548,11 @@ async def test_check_in_at_whole_hour_is_not_shifted(
     """An arrival already on a whole-hour boundary is left untouched
     (no spurious off-by-one-hour drift)."""
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     _entry, client = setup_integration
 
-    arrival = (datetime.now() - timedelta(hours=37)).replace(
+    arrival = (datetime.now(ZoneInfo("Europe/Zagreb")) - timedelta(hours=37)).replace(
         hour=15, minute=0, second=0, microsecond=0
     )
 
@@ -607,6 +618,7 @@ async def test_check_out_at_mid_hour_is_ceiled_up(
     same date. The rounding direction over-reports the stay (later
     departure) which is the safe direction for tourist-board reporting."""
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     entry, client = await _setup_with_active_stay(
         hass, fake_unique_guests, fake_client_factory
@@ -619,7 +631,7 @@ async def test_check_out_at_mid_hour_is_ceiled_up(
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-        departure = (datetime.now() - timedelta(hours=2)).replace(
+        departure = (datetime.now(ZoneInfo("Europe/Zagreb")) - timedelta(hours=2)).replace(
             hour=11, minute=23, second=17, microsecond=500
         )
         await hass.services.async_call(
@@ -644,6 +656,7 @@ async def test_check_out_at_exact_hour_is_not_shifted(
     """A departure already on a whole-hour boundary is left untouched, so
     a 14:00 leave is recorded as 14:00 (not bumped to 15:00)."""
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     entry, client = await _setup_with_active_stay(
         hass, fake_unique_guests, fake_client_factory
@@ -656,7 +669,7 @@ async def test_check_out_at_exact_hour_is_not_shifted(
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-        departure = (datetime.now() - timedelta(hours=2)).replace(
+        departure = (datetime.now(ZoneInfo("Europe/Zagreb")) - timedelta(hours=2)).replace(
             hour=14, minute=0, second=0, microsecond=0
         )
         await hass.services.async_call(
@@ -695,8 +708,12 @@ async def test_check_out_pre_midnight_ceils_to_next_day(
 
         # Build a departure at 23:30 on a fully-bounded day (no need to
         # tie it to "now"; the coordinator does not validate the date
-        # against wall-clock time on the check-out path).
-        departure = datetime(2026, 5, 21, 23, 30, 17, 500)
+        # against wall-clock time on the check-out path). Anchor to
+        # Zagreb so the conversion is a no-op and the 23:30 -> 00:00+1d
+        # ceiling math is unambiguous.
+        from zoneinfo import ZoneInfo
+
+        departure = datetime(2026, 5, 21, 23, 30, 17, 500, tzinfo=ZoneInfo("Europe/Zagreb"))
         await hass.services.async_call(
             DOMAIN,
             SERVICE_CHECK_OUT_PERSON,

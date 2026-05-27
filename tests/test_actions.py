@@ -96,6 +96,77 @@ def test_check_out_payload_shapes() -> None:
     }
 
 
+def test_check_out_payload_converts_aware_datetime_to_zagreb() -> None:
+    """UTC datetimes must be converted to Europe/Zagreb before serialisation.
+
+    Regression for the 2-hour under-report bug: HA hands the coordinator
+    UTC-anchored datetimes from ``last_changed``/``dt_util.now()``; the
+    eVisitor server interprets the scalar YYYYMMDD / HH:MM payload as
+    Croatia local, so dropping tz info shifted every check-out by the
+    UTC offset (1-2 hours depending on DST).
+    """
+    from datetime import datetime, timezone
+
+    moment_utc = datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc)
+    req = CheckOutRequest(
+        id="11111111-2222-3333-4444-555555555555",
+        check_out_date=moment_utc,
+        check_out_time=moment_utc,
+    )
+    p = req.to_payload()
+    # 09:00 UTC on a CEST date = 11:00 Zagreb.
+    assert p["CheckOutDate"] == "20260526"
+    assert p["CheckOutTime"] == "11:00"
+
+
+def test_check_out_payload_aware_datetime_crossing_midnight() -> None:
+    """UTC 22:30 -> Zagreb 00:30 next day. Date must roll over."""
+    from datetime import datetime, timezone
+
+    moment_utc = datetime(2026, 5, 26, 22, 30, tzinfo=timezone.utc)
+    req = CheckOutRequest(
+        id="11111111-2222-3333-4444-555555555555",
+        check_out_date=moment_utc,
+        check_out_time=moment_utc,
+    )
+    p = req.to_payload()
+    assert p["CheckOutDate"] == "20260527"
+    assert p["CheckOutTime"] == "00:30"
+
+
+def test_check_in_payload_converts_aware_datetime_to_zagreb() -> None:
+    """Same conversion path covers CheckIn (arrival + foreseen end)."""
+    from datetime import datetime, timezone
+
+    req = _make_check_in()
+    req.stay_from = datetime(2026, 5, 22, 20, 0, tzinfo=timezone.utc)
+    req.time_stay_from = datetime(2026, 5, 22, 20, 0, tzinfo=timezone.utc)
+    req.foreseen_stay_until = datetime(2026, 5, 24, 8, 0, tzinfo=timezone.utc)
+    req.time_estimated_stay_until = datetime(2026, 5, 24, 8, 0, tzinfo=timezone.utc)
+    payload = req.to_payload()
+    # 20:00 UTC -> 22:00 Zagreb (CEST, same date).
+    assert payload["StayFrom"] == "20260522"
+    assert payload["TimeStayFrom"] == "22:00"
+    # 08:00 UTC -> 10:00 Zagreb (CEST, same date).
+    assert payload["ForeseenStayUntil"] == "20260524"
+    assert payload["TimeEstimatedStayUntil"] == "10:00"
+
+
+def test_check_out_payload_naive_datetime_unchanged() -> None:
+    """Naive datetimes are interpreted as already-local; no conversion."""
+    from datetime import datetime
+
+    moment_naive = datetime(2026, 5, 26, 11, 0)
+    req = CheckOutRequest(
+        id="11111111-2222-3333-4444-555555555555",
+        check_out_date=moment_naive,
+        check_out_time=moment_naive,
+    )
+    p = req.to_payload()
+    assert p["CheckOutDate"] == "20260526"
+    assert p["CheckOutTime"] == "11:00"
+
+
 def test_cancel_check_in_payload_strips_none() -> None:
     p = CancelCheckInRequest(id="abc").to_payload()
     assert p == {"ID": "abc"}
