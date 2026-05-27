@@ -291,8 +291,11 @@ action:
         - variables:
             target_person: "{{ repeat.item }}"
             target_state: "{{ states(target_person) }}"
-            target_last_changed: "{{ states[target_person].last_changed }}"
-            target_away_seconds: "{{ (now() - target_last_changed).total_seconds() | int }}"
+            # NB: do NOT stash `states[target_person].last_changed` into
+            # a variable here. HA renders variable values through Jinja
+            # and the datetime gets serialised to an ISO string, which
+            # then breaks the `now() - x` arithmetic in the eligibility
+            # gate below. Read it inline at each use site instead.
             # Per-person binary_sensor the integration creates; used by
             # the eligibility gate below to skip persons who are already
             # not checked in. Other states (off, unknown, unavailable,
@@ -319,7 +322,7 @@ action:
                 - condition: template
                   value_template: >-
                     {{ target_state not in ['home', 'unknown', 'unavailable']
-                       and target_away_seconds >= (grace_seconds | int)
+                       and (now() - states[target_person].last_changed).total_seconds() >= (grace_seconds | int)
                        and states(checked_in_entity) == 'on' }}
               sequence:
                 # 1c. Confirm mode: send actionable, wait, branch.
@@ -448,7 +451,7 @@ action:
                             # left home and stayed in one zone, this
                             # is when they left home. For zone-hoppers
                             # it is the latest zone-arrival timestamp.
-                            check_out_at: "{{ target_last_changed.isoformat() }}"
+                            check_out_at: "{{ states[target_person].last_changed.isoformat() }}"
 
                         # 1g. Notify mode: passive informational
                         # notification after the check-out.
