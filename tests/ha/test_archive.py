@@ -435,3 +435,94 @@ async def test_archive_events_in_range_filters_correctly(
 def test_archive_schema_version_stable() -> None:
     """Schema version must not change without a migration path."""
     assert ARCHIVE_SCHEMA_VERSION == 1
+
+
+def test_event_from_stay_prefers_actual_departure() -> None:
+    """When DateTimeOfDeparture is populated, archive end == actual
+    departure -- not the planned ForeseenStayUntil. Regression for the
+    v0.5.10 calendar bug where checked-out events still showed their
+    originally booked end date."""
+    from custom_components.evisitor.archive import event_from_stay
+
+    # ForeseenStayUntil = 2026-05-27 (the originally booked end),
+    # DateTimeOfDeparture = 2026-05-26 09:00 UTC (the actual sweep-out).
+    stay = {
+        "ID": "stay-x",
+        "SurnameAndName": "Test Guest",
+        "FacilityName": "Test House",
+        "StayFrom": "/Date(1779408000000+0000)/",  # 2026-05-22
+        "ForeseenStayUntil": "/Date(1779840000000+0000)/",  # 2026-05-27
+        "DateTimeOfDeparture": "/Date(1779786000000+0000)/",  # 2026-05-26 09:00 UTC
+        "CheckedOutTourist": True,
+    }
+
+    event = event_from_stay(stay)
+    assert event is not None
+    end = datetime.fromisoformat(event["end"])
+    # Actual departure must win.
+    assert end == datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc)
+
+
+def test_event_from_stay_falls_back_to_foreseen_without_actual() -> None:
+    """If DateTimeOfDeparture is missing (older snapshots, race with
+    the eVisitor server propagating the check-out), we still emit an
+    event using the planned end so the archive doesn't lose the row."""
+    from custom_components.evisitor.archive import event_from_stay
+
+    stay = {
+        "ID": "stay-y",
+        "SurnameAndName": "Test Guest",
+        "FacilityName": "Test House",
+        "StayFrom": "/Date(1779408000000+0000)/",  # 2026-05-22
+        "ForeseenStayUntil": "/Date(1779840000000+0000)/",  # 2026-05-27
+        "CheckedOutTourist": True,
+    }
+
+    event = event_from_stay(stay)
+    assert event is not None
+    end = datetime.fromisoformat(event["end"])
+    assert end == datetime(2026, 5, 27, 0, 0, tzinfo=timezone.utc)
+
+
+def test_live_event_prefers_actual_departure_when_checked_out() -> None:
+    """Same fix applied to the live-snapshot path that the calendar
+    entity uses while a checked-out stay still sits in all_stays."""
+    from custom_components.evisitor.calendar import _live_event
+
+    stay = {
+        "ID": "stay-z",
+        "SurnameAndName": "Test Guest",
+        "FacilityName": "Test House",
+        "StayFrom": "/Date(1779408000000+0000)/",  # 2026-05-22
+        "ForeseenStayUntil": "/Date(1779840000000+0000)/",  # 2026-05-27
+        "DateTimeOfDeparture": "/Date(1779786000000+0000)/",  # 2026-05-26 09:00 UTC
+        "CheckedOutTourist": True,
+    }
+
+    event = _live_event(stay)
+    assert event is not None
+    assert event.end == datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc)
+
+
+def test_live_event_uses_foreseen_for_active_stays() -> None:
+    """Active stays must still show ForeseenStayUntil -- DateTimeOfDeparture
+    on an active row would typically hold the planned departure, but
+    we don't want to depend on that and we want the calendar to keep
+    showing the booked end while the guest is in residence."""
+    from custom_components.evisitor.calendar import _live_event
+
+    stay = {
+        "ID": "stay-active",
+        "SurnameAndName": "Active Guest",
+        "FacilityName": "Test House",
+        "StayFrom": "/Date(1779408000000+0000)/",
+        "ForeseenStayUntil": "/Date(1779840000000+0000)/",  # 2026-05-27
+        # If the API surfaced something here for an active stay we'd
+        # ignore it -- the guest hasn't left yet.
+        "DateTimeOfDeparture": "/Date(1700000000000+0000)/",
+        "CheckedOutTourist": False,
+    }
+
+    event = _live_event(stay)
+    assert event is not None
+    assert event.end == datetime(2026, 5, 27, 0, 0, tzinfo=timezone.utc)

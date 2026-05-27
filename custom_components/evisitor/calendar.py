@@ -113,9 +113,16 @@ class EVisitorFacilityCalendar(
 
 def _live_event(stay: dict[str, Any]) -> CalendarEvent | None:
     start = _dt_or_none(stay.get("TimeStayFrom") or stay.get("StayFrom"))
-    end = _dt_or_none(
-        stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil")
-    )
+    # For checked-out stays, prefer the actual DateTimeOfDeparture over the
+    # planned ForeseenStayUntil so the calendar reflects when the guest
+    # really left (rounded to the hour by the check_out_person service).
+    end = None
+    if stay.get("CheckedOutTourist"):
+        end = _dt_or_none(stay.get("DateTimeOfDeparture"))
+    if end is None:
+        end = _dt_or_none(
+            stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil")
+        )
     if start is None or end is None or end <= start:
         return None
     return CalendarEvent(

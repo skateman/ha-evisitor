@@ -257,7 +257,12 @@ def event_from_stay(stay: Mapping[str, Any]) -> dict[str, Any] | None:
             return None
 
     start = _dt(stay.get("TimeStayFrom") or stay.get("StayFrom"))
-    end = _dt(stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil"))
+    # Archive entries are always CheckedOutTourist=True, so prefer the
+    # actual DateTimeOfDeparture; fall back to the planned end only if
+    # the API hasn't populated it yet.
+    end = _dt(stay.get("DateTimeOfDeparture"))
+    if end is None:
+        end = _dt(stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil"))
     if start is None or end is None or end <= start:
         return None
     return {
