@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -10,8 +11,20 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from pyevisitor.encoding import from_dotnet_date
+
 from .const import DOMAIN
 from .coordinator import EVisitorCoordinator
+
+
+def _dt_or_none(value: Any) -> datetime | None:
+    """Parse an eVisitor ``/Date(...)/`` string to a datetime, else None."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return from_dotnet_date(value)
+    except (ValueError, TypeError):
+        return None
 
 
 async def async_setup_entry(
@@ -83,9 +96,22 @@ class EVisitorPersonCheckedIn(
         stay = self.coordinator.find_active_stay_for_person(self._person)
         if stay is None:
             return None
+        # eVisitor splits each timestamp across two fields: a date-only
+        # ``StayFrom`` / ``ForeseenStayUntil`` (whose time component is
+        # always 00:00) and a time-bearing ``TimeStayFrom`` /
+        # ``TimeEstimatedStayUntil`` that carries the real wall clock.
+        # Expose the time-bearing field (parsed to a tz-aware datetime)
+        # so the attribute reflects the actual check-in / foreseen
+        # check-out moment instead of always reading as midnight. Fall
+        # back to the date-only field for older records that predate the
+        # time component. Mirrors the calendar entity's ``_live_event``.
         return {
             "check_in_id": stay.get("ID"),
-            "stay_from": stay.get("StayFrom"),
-            "foreseen_stay_until": stay.get("ForeseenStayUntil"),
+            "stay_from": _dt_or_none(
+                stay.get("TimeStayFrom") or stay.get("StayFrom")
+            ),
+            "foreseen_stay_until": _dt_or_none(
+                stay.get("TimeEstimatedStayUntil") or stay.get("ForeseenStayUntil")
+            ),
             "facility": stay.get("FacilityName"),
         }

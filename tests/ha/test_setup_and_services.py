@@ -795,3 +795,71 @@ async def test_calendar_shows_checked_out_stays_as_historical_events(
 
         await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
+
+
+async def test_checked_in_binary_sensor_exposes_time_bearing_fields(
+    hass: HomeAssistant, fake_unique_guests, fake_client_factory
+) -> None:
+    """The per-person ``binary_sensor`` must expose the *time-bearing*
+    check-in / foreseen check-out moments, not eVisitor's date-only
+    ``StayFrom`` / ``ForeseenStayUntil`` fields (whose time component is
+    always 00:00). Regression for the "auto check-in time is always
+    midnight" report: the attributes read midnight because they surfaced
+    the date-only fields instead of ``TimeStayFrom`` /
+    ``TimeEstimatedStayUntil``.
+    """
+    import copy
+    from datetime import datetime
+
+    guests = copy.deepcopy(fake_unique_guests)
+    guests[0].latest["CheckedOutTourist"] = False
+    # Date-only fields sit at midnight; the time-bearing fields carry the
+    # real 10:00 wall clock. Epochs use the +0200 (CEST) offset that
+    # production returns.
+    guests[0].latest["StayFrom"] = "/Date(1783202400000+0200)/"  # 2026-07-05 00:00
+    guests[0].latest["TimeStayFrom"] = "/Date(1783238400000+0200)/"  # 2026-07-05 10:00
+    guests[0].latest["DateTimeOfArrival"] = "/Date(1783238400000+0200)/"
+    guests[0].latest["ForeseenStayUntil"] = "/Date(1784239200000+0200)/"  # 2026-07-17 00:00
+    guests[0].latest["TimeEstimatedStayUntil"] = "/Date(1784275200000+0200)/"  # 2026-07-17 10:00
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_ENVIRONMENT: "production",
+            CONF_USERNAME: "u",
+            CONF_PASSWORD: "p",
+            CONF_API_KEY: "",
+            CONF_FACILITY_CODE: "0000001",
+        },
+        options={CONF_PERSON_MAP: {PERSON_ENTITY: PERSON_OPTIONS}},
+    )
+    entry.add_to_hass(hass)
+
+    client = fake_client_factory()
+    client.guests.unique.return_value = guests
+    client.guests.stays.return_value = [g.latest for g in guests]
+    client.browses.list_tourists.return_value = [g.latest for g in guests]
+
+    with patch(
+        "custom_components.evisitor.coordinator.EVisitorClient",
+        return_value=client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        state = hass.states.get("binary_sensor.demo_user_checked_in")
+        assert state is not None
+        assert state.state == STATE_ON
+
+        def _hour(value) -> int:
+            if isinstance(value, str):
+                value = datetime.fromisoformat(value)
+            return value.hour
+
+        # The arrival attribute must reflect 10:00 (from TimeStayFrom),
+        # NOT the date-only 00:00 from StayFrom.
+        assert _hour(state.attributes["stay_from"]) == 10
+        assert _hour(state.attributes["foreseen_stay_until"]) == 10
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
