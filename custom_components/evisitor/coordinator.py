@@ -586,10 +586,19 @@ class EVisitorCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 hour=hh, minute=mm, second=0, microsecond=0
             )
 
-        # Extension keeps the original StayFrom + TimeStayFrom.
+        # Extension keeps the original StayFrom + TimeStayFrom. eVisitor's
+        # StayFrom is date-only (always midnight); the actual arrival clock
+        # lives in TimeStayFrom / DateTimeOfArrival. Reusing StayFrom here
+        # would silently overwrite every extended stay's arrival time with
+        # 00:00 when the full CheckInTourist payload is re-posted.
+        original_from_raw = (
+            active.get("TimeStayFrom")
+            or active.get("DateTimeOfArrival")
+            or active.get("StayFrom")
+        )
         original_from = (
-            from_dotnet_date(active["StayFrom"])
-            if active.get("StayFrom")
+            from_dotnet_date(original_from_raw)
+            if original_from_raw
             else dt_util.now()
         )
         window = StayWindow(

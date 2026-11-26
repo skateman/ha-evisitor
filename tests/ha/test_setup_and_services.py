@@ -406,8 +406,10 @@ async def test_extend_stay_with_stay_days_builds_window(
     prijava ID."""
     import copy
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     from homeassistant.util import dt as dt_util
+    from pyevisitor.encoding import to_dotnet_date
 
     from custom_components.evisitor.const import (
         CONF_SETTINGS,
@@ -417,12 +419,20 @@ async def test_extend_stay_with_stay_days_builds_window(
     # Flip Novák Marek to currently-active so extend_stay finds him.
     guests = copy.deepcopy(fake_unique_guests)
     guests[0].latest["CheckedOutTourist"] = False
-    # Bump StayFrom to a recent date so the stay is "active" by date too.
+    # Keep the date-only StayFrom at midnight while the time-bearing fields
+    # carry the real 18:00 arrival. The extender must preserve 18:00 when it
+    # re-posts the full CheckInTourist payload.
     now = dt_util.now()
-    yesterday_ts = int((now - timedelta(days=1)).timestamp() * 1000)
-    guests[0].latest["StayFrom"] = f"/Date({yesterday_ts}+0100)/"
-    guests[0].latest["DateTimeOfArrival"] = f"/Date({yesterday_ts}+0100)/"
-    guests[0].latest["ForeseenStayUntil"] = f"/Date({yesterday_ts + 86400000}+0100)/"
+    arrival = (now.astimezone(ZoneInfo("Europe/Zagreb")) - timedelta(days=1)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    date_only = arrival.replace(hour=0)
+    guests[0].latest["StayFrom"] = to_dotnet_date(date_only)
+    guests[0].latest["TimeStayFrom"] = to_dotnet_date(arrival)
+    guests[0].latest["DateTimeOfArrival"] = to_dotnet_date(arrival)
+    guests[0].latest["ForeseenStayUntil"] = to_dotnet_date(
+        date_only + timedelta(days=1)
+    )
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -463,11 +473,14 @@ async def test_extend_stay_with_stay_days_builds_window(
         payload = submitted.to_payload()
         # Same ID re-used (not a new check-in).
         assert payload["ID"] == "stay-1"
+        # Preserve the original arrival clock. Before this regression fix,
+        # extend_stay rebuilt TimeStayFrom from the date-only StayFrom field
+        # and silently changed every extended stay's arrival to 00:00.
+        assert payload["StayFrom"] == arrival.strftime("%Y%m%d")
+        assert payload["TimeStayFrom"] == "18:00"
         # Today + 4 days @ 11:00 Zagreb local. The coordinator anchors
         # the "today midnight" baseline in Zagreb so the wall clock the
         # server reads matches the user-configured check-out time.
-        from zoneinfo import ZoneInfo
-
         zagreb_midnight = now.astimezone(ZoneInfo("Europe/Zagreb")).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
